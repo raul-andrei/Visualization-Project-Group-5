@@ -1,5 +1,6 @@
 from dash import html, dcc
 import plotly.express as px
+import plotly.graph_objects as go
 
 class MapView:
     def __init__(self):
@@ -9,26 +10,41 @@ class MapView:
         """
         Returns the layout for the Map section.
         """
+        fig = go.Figure(go.Scattergeo())
+        fig.update_layout(
+            margin={"r":0,"t":0,"l":0,"b":0},
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            geo=dict(
+                bgcolor="rgba(0,0,0,0)",
+                showland=True,
+                landcolor="#1f2833",
+                showocean=True,
+                oceancolor="#0b0c10",
+                showcountries=True,
+                countrycolor="#45a29e", 
+                projection_type="natural earth" 
+            )
+        )
+
+
         return html.Div(
             className="map-container",
             children=[
-                # This Graph component is where Plotly draws the map
                 dcc.Graph(
                     id='world-map',
-                    # We configure it to look good before data arrives
-                    config={'displayModeBar': False, 'scrollZoom': False},
-                    style={'height': '100%', 'width': '100%'}
+                    figure=fig,
+                    className='map-graph',
+                    config={'displayModeBar': False, 'scrollZoom': True, 'showTips': False},
+                    
                 ),
-                
-                # A visual overlay helper (optional design touch)
                 html.Div(
-                    style={
-                        'position': 'absolute', 'top': '20px', 'right': '20px', 
-                        'padding': '10px 20px', 'background': 'rgba(0,0,0,0.8)', 
-                        'borderRadius': '4px', 'border': '1px solid #66fcf1',
-                        'color': '#aaa', 'pointerEvents': 'none'
-                    }, 
-                    children="STATUS: WAITING FOR DATA"
-                )
+                className="map-overlay",
+                children=[
+                    html.Span("INTERACTION MODE: ", style={'color': '#aaa'}),
+                    html.Span("CTRL + CLICK to Compare", style={'color': '#fff', 'fontWeight': 'bold'})
+                ]
+            )
+                
             ]
         )

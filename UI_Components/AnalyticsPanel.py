@@ -9,7 +9,7 @@ class AnalyticsPanel:
         Returns the layout for the bottom analytics section (Tabs).
         """
         return html.Div(
-            className="custom-tabs-container", # This applies the glassmorphism style
+            className="custom-tabs-container",
             style={'height': '35vh'},
             children=[
                 dcc.Tabs(

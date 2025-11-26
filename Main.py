@@ -23,17 +23,21 @@ class Main:
             children=[
                 # Render the Sidebar
                 self.sidebar.render(),
-                
-                # Render the Main Content Area (MapView)
-                self.map_view.render(),
 
-                # Render the Analytics Panel at the bottom
-                self.analytics_panel.render()
+                # Main Content Area: MapView + AnalyticsPanel
+                html.Div(className="map-and-analytics-container",
+                    children=[
+                        # Render the Main Content Area (MapView)
+                        self.map_view.render(),
+                        # Render the Analytics Panel below the MapView
+                        self.analytics_panel.render()
+                    ]
+                )
             ]
         )
 
     def run(self):
-        self.app.run(debug=True)
+        self.app.run(debug=True, dev_tools_ui=False)
 
 if __name__ == '__main__':
     main = Main()
