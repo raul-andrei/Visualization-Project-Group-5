@@ -33,18 +33,65 @@ class Main:
     
     def register_callbacks(self):
         @self.app.callback(
-            Output('world-map', 'figure'),
-            Input({'type': 'persona-card', 'index': ALL}, 'n_clicks')
+            Output("world-map", "figure"),
+            Input({"type": "persona-card", "index": ALL}, "n_clicks"),
         )
         def update_map_on_persona_click(n_clicks_list):
-            triggered_id = ctx.triggered_id
-            if triggered_id is not None:
-                persona_index = triggered_id['index']
-                # Logic to update the map based on the selected persona
-                # For now, we just print the selected persona
-                print(f"Persona selected: {persona_index}")
-            # Return the updated figure (for now, return the existing figure)
-            return self.map_view.render().children[0].figure
+            """
+            Update the choropleth map when a persona card is clicked.
+            Uses scoring_df and PERSONA_TO_SCORE.
+            """
+            # 1. Work out which persona is active
+            trigger = ctx.triggered_id  # e.g. {"type": "persona-card", "index": "agriculture"}
+
+            if trigger and isinstance(trigger, dict):
+                persona = trigger.get("index", "real_estate")
+            else:
+                # initial page load / no clicks yet
+                persona = "real_estate"
+
+            # 2. Map persona -> score column
+            score_col = self.PERSONA_TO_SCORE.get(persona)
+            if not score_col or score_col not in scoring_df.columns:
+                # no score for this persona: return base world map
+                return self._empty_world_figure()
+
+            # 3. Prepare data for the map
+            df_plot = scoring_df[["Country", score_col]].dropna()
+            if df_plot.empty:
+                return self._empty_world_figure()
+
+            # 4. Build choropleth
+            fig = px.choropleth(
+                df_plot,
+                locations="Country",
+                locationmode="country names",
+                color=score_col,
+                hover_name="Country",
+                title=f"{persona.upper()} ",
+                # you can add color_continuous_scale="Viridis" if you want
+            )
+
+            # 5. Apply your dark styling (same as MapView)
+            fig.update_layout(
+                margin={"r": 0, "t": 40, "l": 0, "b": 0},
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                geo=dict(
+                    bgcolor="rgba(0,0,0,0)",
+                    showland=True,
+                    landcolor="#1f2833",
+                    showocean=True,
+                    oceancolor="#0b0c10",
+                    showcountries=True,
+                    countrycolor="#45a29e",
+                    projection_type="natural earth",
+                ),
+                font_color="white",
+            )
+
+            return fig
+
         @self.app.callback(
             Output("top-5-chart", "children"),
             Input({"type": "persona-card", "index": ALL}, "n_clicks")
