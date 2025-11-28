@@ -4,12 +4,12 @@ class Sidebar:
     def __init__(self):
         self.PERSONAS = {
             'real_estate': {
-                'name': 'REAL ESTATE & URBAN DEV',
+                'name': 'REAL ESTATE',
                 'desc': 'High population density, stability, and wealth.',
                 'color': '#66fcf1'
             },
             'agriculture': {
-                'name': 'AGRICULTURE & AGRI-BIZ',
+                'name': 'AGRICULTURE',
                 'desc': 'Land availability, labor force, and resources.',
                 'color': '#22c55e'
             },
@@ -19,12 +19,12 @@ class Sidebar:
                 'color': '#fb923c'
             },
             'telecom': {
-                'name': 'TELECOM & DIGITAL INFRA',
+                'name': 'TELECOM',
                 'desc': 'High tech adoption and urbanization.',
                 'color': '#d946ef'
             },
             'fintech': {
-                'name': 'FINANCIAL SERVICES & FINTECH',
+                'name': 'FINANCIAL SERVICES',
                 'desc': 'Wealthy markets with digital readiness.',
                 'color': '#3b82f6'
             }
