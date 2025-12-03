@@ -8,6 +8,7 @@ from plotly import graph_objects as go
 
 scoring_df = load_and_process_data()
 
+
 class Main:
     
     def __init__(self):
