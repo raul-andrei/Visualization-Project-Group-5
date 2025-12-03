@@ -104,10 +104,46 @@ class Main:
             if not score_col or score_col not in scoring_df.columns:
                 return "No data"
 
-            df_plot = scoring_df[["Country", score_col]].dropna().nlargest(5, score_col)
-            fig = px.bar(df_plot, x="Country", y=score_col, title=f"Top 5 — {persona}")
-            fig.update_layout(paper_bgcolor="rgba(0,0,0,0)", font_color="white", margin=dict(t=30))
-            return dcc.Graph(figure=fig, config={"displayModeBar": False})
+            # Top 5 bar chart
+            df_top = scoring_df[["Country", score_col]].dropna().nlargest(5, score_col)
+            bar_fig = px.bar(
+                df_top,
+                x="Country",
+                y=score_col,
+                title=f"Top 5 — {persona}",
+            )
+            bar_fig.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font_color="white",
+                margin=dict(t=30),
+            )
+
+            # Neural map scatter (PCA_1 / PCA_2 from neural_engine or PCA fallback)
+            if "PCA_1" in scoring_df.columns and "PCA_2" in scoring_df.columns:
+                df_scatter = scoring_df[["Country", score_col, "PCA_1", "PCA_2"]].dropna(subset=["PCA_1", "PCA_2", score_col])
+                scatter_fig = px.scatter(
+                    df_scatter,
+                    x="PCA_1",
+                    y="PCA_2",
+                    color=score_col,
+                    hover_name="Country",
+                    title=f"Neural Country Map — {persona}",
+                )
+                scatter_fig.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font_color="white",
+                    margin=dict(t=30),
+                )
+
+                return html.Div([
+                    dcc.Graph(figure=bar_fig, config={"displayModeBar": False}),
+                    dcc.Graph(figure=scatter_fig, config={"displayModeBar": False}),
+                ])
+
+            # Fallback: only bar chart if PCA/Neural coords are missing
+            return dcc.Graph(figure=bar_fig, config={"displayModeBar": False})
 
 
     def setup_layout(self):
