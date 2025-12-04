@@ -7,17 +7,23 @@
     --glass-bg: rgba(20, 20, 20, 0.6);
 }
 
+html {
+    background-color: var(--bg-dark);
+}
+
 body {
     margin: 0;
     background-color: var(--bg-dark);
     color: var(--text-primary);
     font-family: 'Inter', sans-serif;
-    overflow: hidden;
     
     /* The Nebula Animation */
     background: linear-gradient(-45deg, #050505, #0f172a, #0a0a0a, #1a1a2e);
     background-size: 400% 400%;
     animation: nebula 30s ease infinite;
+    overflow-x: hidden;
+    overflow-y: auto;
+    min-height: 100vh;
 }
 
 @keyframes nebula {
@@ -28,7 +34,6 @@ body {
 
 .app-container {
     display: flex;
-    height: 100vh;
     width: 100vw;
     flex-direction: row;
 }
@@ -37,19 +42,24 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    height: 100vh;
-    overflow: hidden;
+    /*height: 100vh;
+    overflow: hidden;*/
+    margin-left: 310px;
+    position: relative;
 }
 
 .sidebar {
-    width: 340px;
-    min-width: 340px;
+    width: 310px;
+    min-width: 310px;
     height: 100vh;
     background: rgba(10, 10, 10, 0.75);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border-right: 1px solid var(--glass-border);
     display: flex;
+    position: fixed;
+    top: 0;
+    left: 0;
     flex-direction: column;
     z-index: 50;
     box-shadow: 10px 0 30px rgba(0,0,0,0.5);
@@ -59,9 +69,7 @@ body {
     flex: 1;
     display: flex;
     flex-direction: column;
-    height: 100vh;
     position: relative;
-    overflow: hidden;
 }
 
 
@@ -158,9 +166,10 @@ body {
 
 
 .map-container {
-    flex: 1; /* Takes top 65% of screen */
+    flex: 0 0 auto;
+    height: 60vh;
     position: relative;
-    margin: 20px 20px 0 20px; /* Spacing */
+    margin: 10px 10px 0 10px; /* Spacing */
     border-radius: 8px 8px 0 0;
     border: 1px solid var(--glass-border);
     background: rgba(0,0,0,0.3);
@@ -204,13 +213,14 @@ body {
 
 
 .custom-tabs-container {
-    height: 35vh;
+    flex: 0 0 auto;
+    min-height: 40vh;
     background: rgba(10,10,10,0.9);
     backdrop-filter: blur(20px);
     border-top: 1px solid var(--glass-border);
     display: flex;
     flex-direction: column;
-    overflow: scroll;
+    
 }
 
 .custom-tabs .tab {

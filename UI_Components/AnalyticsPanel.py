@@ -10,7 +10,6 @@ class AnalyticsPanel:
         """
         return html.Div(
             className="custom-tabs-container",
-            style={'height': '35vh'},
             children=[
                 dcc.Tabs(
                     id='analytics-tabs',

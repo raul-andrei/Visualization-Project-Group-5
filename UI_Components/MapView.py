@@ -24,7 +24,8 @@ class MapView:
                 showcountries=True,
                 countrycolor="#45a29e", 
                 projection_type="natural earth" 
-            )
+            ),
+            dragmode=False
         )
 
 
@@ -42,7 +43,7 @@ class MapView:
                 className="map-overlay",
                 children=[
                     html.Span("INTERACTION MODE: ", style={'color': '#aaa'}),
-                    html.Span("CTRL + CLICK to Compare", style={'color': '#fff', 'fontWeight': 'bold'})
+                    html.Span("DOUBLE-CLICK to Reset ", style={'color': '#fff', 'fontWeight': 'bold'})
                 ]
             )
                 
