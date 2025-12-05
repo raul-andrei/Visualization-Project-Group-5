@@ -1,3 +1,5 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
 :root {
     --bg-dark: #050505;
     --text-primary: #ffffff;
@@ -15,7 +17,7 @@ body {
     margin: 0;
     background-color: var(--bg-dark);
     color: var(--text-primary);
-    font-family: 'Inter', sans-serif;
+    font-family:  'Inter', sans-serif;
     
     /* The Nebula Animation */
     background: linear-gradient(-45deg, #050505, #0f172a, #0a0a0a, #1a1a2e);

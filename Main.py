@@ -25,11 +25,13 @@ class Main:
         self.PERSONA_TO_SCORE = {
             "real_estate": "RE_Opp",
             "agriculture": "Ag_Opp",
-            "logistics": "Logistics_Opp",   # ensure scoring produces this name
+            "logistics": "Logistics_Opp",  
             "telecom": "Telecom_Opp",
             "fintech": "Fintech_Opp",
-            "retail": "Retail_Opp"          # if available
+            "retail": "Retail_Opp"          
         }
+
+        self.PERSONAS = Sidebar().PERSONAS
 
     
     def register_callbacks(self):
@@ -69,13 +71,21 @@ class Main:
                 locationmode="country names",
                 color=score_col,
                 hover_name="Country",
-                title=f"{persona.upper()} ",
-                # you can add color_continuous_scale="Viridis" if you want
+                title=f"<b>{self.PERSONAS[persona]['name']}<b>",
             )
 
             # 5. Apply your dark styling (same as MapView)
             fig.update_layout(
-                margin={"r": 0, "t": 40, "l": 0, "b": 0},
+                title_font=dict(
+                    family="Inter, sans-serif",
+                    size=22,
+                    color="white"
+                ),
+                font=dict(
+                    family="Inter, sans-serif",
+                    color="white"   # axis labels, hover etc.
+                ),
+                margin={"r": 0, "t": 60, "l": 0, "b": 0},
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 geo=dict(
@@ -110,13 +120,22 @@ class Main:
                 df_top,
                 x="Country",
                 y=score_col,
-                title=f"Top 5 — {persona}",
+                title=f"Top 5 — {self.PERSONAS[persona]['name']}",
             )
             bar_fig.update_layout(
+                title_font=dict(
+                    family="Inter, sans-serif",
+                    size=22,
+                    color="white"
+                ),
+                font=dict(
+                    family="Inter, sans-serif",
+                    color="white"   # axis labels, hover etc.
+                ),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 font_color="white",
-                margin=dict(t=30),
+                margin=dict(t=60),
             )
 
             # Neural map scatter (PCA_1 / PCA_2 from neural_engine or PCA fallback)
@@ -128,13 +147,22 @@ class Main:
                     y="PCA_2",
                     color=score_col,
                     hover_name="Country",
-                    title=f"Neural Country Map — {persona}",
+                    title=f"Neural Country Map — {self.PERSONAS[persona]['name']}",
                 )
                 scatter_fig.update_layout(
+                    title_font=dict(
+                    family="Inter, sans-serif",
+                    size=22,
+                    color="white"
+                ),
+                font=dict(
+                    family="Inter, sans-serif",
+                    color="white"   # axis labels, hover etc.
+                ),
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                     font_color="white",
-                    margin=dict(t=30),
+                    margin=dict(t=60),
                 )
 
                 return html.Div([
