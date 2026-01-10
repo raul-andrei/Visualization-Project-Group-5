@@ -1,4 +1,5 @@
-from dash import Dash, Input, Output, html, ctx, ALL, dcc
+from dash import Dash, Input, Output, State, html, ctx, ALL, dcc
+from dash.exceptions import PreventUpdate
 from UI_Components.Sidebar import Sidebar
 from UI_Components.MapView import MapView
 from UI_Components.AnalyticsPanel import AnalyticsPanel
@@ -21,7 +22,20 @@ class Main:
 
         self.app.layout = self.setup_layout()
 
-        self.register_callbacks()
+        # Force Plotly to relayout smoothly during sidebar collapse/expand
+        self.app.clientside_callback(
+            """
+            function(state) {
+                // Dispatch resize events during the sidebar animation
+                const delays = [0, 50, 120, 200, 300, 420];
+                delays.forEach(d => setTimeout(() => window.dispatchEvent(new Event('resize')), d));
+                return Date.now();
+            }
+            """,
+            Output("plotly-resize-signal", "data"),
+            Input("sidebar-state", "data"),
+        )
+
         self.PERSONA_TO_SCORE = {
             "real_estate": "RE_Opp",
             "agriculture": "Ag_Opp",
@@ -33,8 +47,90 @@ class Main:
 
         self.PERSONAS = Sidebar().PERSONAS
 
+        self.register_callbacks()
+
     
     def register_callbacks(self):
+        # -----------------------------
+        # Sidebar state: collapse + active panel
+        # -----------------------------
+        @self.app.callback(
+            Output("sidebar-state", "data"),
+            Input("sidebar-collapse-btn", "n_clicks"),
+            Input({"type": "sidebar-nav", "index": ALL}, "n_clicks"),
+            State("sidebar-state", "data"),
+            prevent_initial_call=True,
+        )
+        def update_sidebar_state(collapse_clicks, nav_clicks, state):
+            if state is None:
+                state = {"collapsed": False, "active": "investors"}
+
+            trigger = ctx.triggered_id
+            if trigger is None:
+                raise PreventUpdate
+
+            # 1) Collapse button toggles collapsed state
+            if trigger == "sidebar-collapse-btn":
+                state["collapsed"] = not state.get("collapsed", False)
+                return state
+
+            # 2) Nav item pressed -> set active panel (and auto-expand if collapsed)
+            if isinstance(trigger, dict) and trigger.get("type") == "sidebar-nav":
+                state["active"] = trigger.get("index")
+                if state.get("collapsed", False):
+                    state["collapsed"] = False
+                return state
+
+            raise PreventUpdate
+
+        @self.app.callback(
+            Output("sidebar-wrapper", "className"),
+            Output({"type": "sidebar-nav", "index": "investors"}, "className"),
+            Output({"type": "sidebar-nav", "index": "geo"}, "className"),
+            Output({"type": "sidebar-nav", "index": "bookmarks"}, "className"),
+            Output("sidebar-panel-investors", "className"),
+            Output("sidebar-panel-geo", "className"),
+            Output("sidebar-panel-bookmarks", "className"),
+            Output("map-and-analytics-container", "className"),
+            Input("sidebar-state", "data"),
+        )
+        def apply_sidebar_classes(state):
+            if not state:
+                state = {"collapsed": False, "active": "investors"}
+
+            collapsed = state.get("collapsed", False)
+            active = state.get("active", "investors")
+
+            # Sidebar collapse state
+            sidebar_class = "sidebar sidebar--collapsed" if collapsed else "sidebar"
+
+            content_class = (
+                "map-and-analytics-container map-and-analytics-container--collapsed"
+                if collapsed
+                else "map-and-analytics-container"
+            )
+
+            # Panel visibility
+            def panel_class(key):
+                base = "sidebar-panel"
+                return f"{base} sidebar-panel--active" if active == key else base
+
+            # Active nav highlight
+            def nav_class(key):
+                base = "sidebar-nav-item"
+                return f"{base} sidebar-nav-item--active" if active == key else base
+
+            return (
+                sidebar_class,
+                nav_class("investors"),
+                nav_class("geo"),
+                nav_class("bookmarks"),
+                panel_class("investors"),
+                panel_class("geo"),
+                panel_class("bookmarks"),
+                content_class,
+            )
+
         @self.app.callback(
             Output("world-map", "figure"),
             Input({"type": "persona-card", "index": ALL}, "n_clicks"),
@@ -181,11 +277,17 @@ class Main:
         return html.Div(
             className="app-container", # Defined in assets/style.css
             children=[
+                # Sidebar UI state (collapsed + active panel)
+                dcc.Store(id="sidebar-state", data={"collapsed": False, "active": "investors"}),
+                dcc.Store(id="plotly-resize-signal", data=0),
+
                 # Render the Sidebar
                 self.sidebar.render(),
 
                 # Main Content Area: MapView + AnalyticsPanel
-                html.Div(className="map-and-analytics-container",
+                html.Div(
+                    id="map-and-analytics-container",
+                    className="map-and-analytics-container",
                     children=[
                         # Render the Main Content Area (MapView)
                         self.map_view.render(),
