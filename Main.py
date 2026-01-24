@@ -20,7 +20,17 @@ import numpy as np
 # -----------------------------
 scoring_df = load_and_process_data()
 
-
+# -----------------------------
+# Styling
+# -----------------------------
+PINK_SCALE = [
+    [0.0, "#2b1d24"],   # very dark gray-pink
+    [0.2, "#4a2130"],
+    [0.4, "#6a2540"],
+    [0.6, "#8e2a58"],
+    [0.8, "#c13586"],
+    [1.0, "#ff4fc3"],   # sharp pink
+]
 
 
 
@@ -221,6 +231,12 @@ class Main:
                 color=score_col,
                 hover_name="Country",
                 title=f"<b>{self.PERSONAS[persona]['name']}</b>",
+                color_continuous_scale=PINK_SCALE,
+            )
+
+            fig.update_traces(
+                marker_line_width=1.5,
+                marker_line_color="rgba(255,255,255,0.15)",
             )
 
             fig.update_layout(
@@ -240,6 +256,10 @@ class Main:
                     projection_type="natural earth",
                 ),
                 font_color="white",
+                coloraxis=dict(
+                cmin=df_plot[score_col].min(),
+                cmax=df_plot[score_col].max(),
+                )
             )
 
             return fig
