@@ -7,27 +7,22 @@ class Sidebar:
         self.PERSONAS = {
             "real_estate": {
                 "name": "REAL ESTATE",
-                "desc": "High population density, stability, and wealth.",
                 "color": "#66fcf1",
             },
             "agriculture": {
                 "name": "AGRICULTURE",
-                "desc": "Land availability, labor force, and resources.",
                 "color": "#22c55e",
             },
             "logistics": {
                 "name": "TRANSPORT & LOGISTICS",
-                "desc": "Trade hubs with strong infrastructure.",
                 "color": "#fb923c",
             },
             "telecom": {
                 "name": "TELECOM",
-                "desc": "High tech adoption and urbanization.",
                 "color": "#d946ef",
             },
             "fintech": {
                 "name": "FINANCIAL SERVICES",
-                "desc": "Wealthy markets with digital readiness.",
                 "color": "#3b82f6",
             },
         }
@@ -114,8 +109,21 @@ class Sidebar:
             className="sidebar-panel sidebar-panel--active",  # default active panel
             children=[
                 html.Div(
-                    className="persona-container",
-                    children=[self.build_card(key, data) for key, data in self.PERSONAS.items()],
+                    className="investor-selector",
+                    children=[
+                        html.Div("Investor Type", className="investor-selector-label"),
+                        dcc.Dropdown(
+                            id="persona-dropdown",
+                            options=[
+                                {"label": v["name"], "value": k}
+                                for k, v in self.PERSONAS.items()
+                            ],
+                            value="real_estate",
+                            clearable=False,
+                            searchable=False,
+                            className="investor-selector-dropdown",
+                        ),
+                    ],
                 ),
 
                 # Sliders will be rendered dynamically depending on the selected persona
@@ -172,34 +180,6 @@ class Sidebar:
                 html.Div(
                     "Coming soon: save countries to a shortlist for later comparison.",
                     className="sidebar-placeholder",
-                ),
-            ],
-        )
-
-    # -------------------------
-    # Persona cards
-    # -------------------------
-    def build_card(self, key, data):
-        """Creates a single persona card component."""
-        return html.Div(
-            id={"type": "persona-card", "index": key},
-            className="persona-card",
-            style={"--active-color": data["color"]},
-            children=[
-                html.Div(
-                    className="persona-header",
-                    children=[
-                        html.Span(data["name"], className="persona-name"),
-                        html.Div(
-                            style={
-                                "width": "8px",
-                                "height": "8px",
-                                "borderRadius": "50%",
-                                "backgroundColor": data["color"],
-                                "boxShadow": f"0 0 8px {data['color']}",
-                            }
-                        ),
-                    ],
                 ),
             ],
         )

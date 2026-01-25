@@ -311,6 +311,19 @@ body {
     animation: activeDotPulse 2.2s var(--ease-in-out) infinite;
 }
 
+.investor-selector {
+  margin-bottom: 14px;
+}
+
+.investor-selector-label {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: rgba(255,255,255,0.85);
+  margin: 0 0 8px 2px;
+}
+
 .content-container {
     flex: 1;
     display: flex;
@@ -374,68 +387,105 @@ body {
     background: linear-gradient(90deg, rgba(102,252,241,0.35), rgba(255,255,255,0.04));
 }
 
-
-.persona-container {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding-right: 6px; /* prevents hover overflow */
+/* Investor dropdown (dcc.Dropdown) – dark, compact, consistent with the sidebar */
+.investor-selector-dropdown .Select {
+    font-family: 'Inter', sans-serif;
 }
 
-.persona-card {
-    position: relative;
-    padding: 14px 14px;
-    border-radius: 8px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
-    background: linear-gradient(145deg, rgba(255,255,255,0.035) 0%, rgba(255,255,255,0.01) 100%);
+.investor-selector-dropdown .Select-control {
+    height: 38px !important;
+    min-height: 38px !important;
+    border-radius: 12px !important;
+
+    background: rgba(0,0,0,0.35) !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.03);
+
     cursor: pointer;
-    transition: 
-        background 0.25s ease,
-        border-color 0.25s ease,
-        box-shadow 0.25s ease,
-        transform 0.25s ease;
-    overflow: hidden;
+    transition:
+        border-color var(--anim-fast) var(--ease-out),
+        background var(--anim-fast) var(--ease-out),
+        box-shadow var(--anim-fast) var(--ease-out);
 }
 
-.persona-card:hover {
-    background: rgba(255, 255, 255, 0.07);
-    transform: translateX(2px);
-    border-color: rgba(255,255,255,0.22);
-    box-shadow: 0 4px 18px rgba(0,0,0,0.35);
+.investor-selector-dropdown .Select.is-focused > .Select-control,
+.investor-selector-dropdown .Select.is-open > .Select-control {
+    border-color: rgba(102,252,241,0.55) !important;
+    background: rgba(0,0,0,0.42) !important;
+    box-shadow: 0 0 0 2px rgba(102,252,241,0.12);
 }
 
-.persona-card.selected {
-    background: linear-gradient(90deg, rgba(255,255,255,0.05), transparent);
-    border-color: var(--active-color, #fff);
-    box-shadow: 0 0 15px rgba(0,0,0,0.3), inset 2px 0 0 var(--active-color);
-}
-
-.persona-header {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 10px;
-}
-
-.persona-name {
-    font-size: 13px;
-    font-weight: 800;
-    color: #ffffff;
-    letter-spacing: 1.2px;
+.investor-selector-dropdown .Select-placeholder,
+.investor-selector-dropdown .Select-value-label {
+    color: rgba(255,255,255,0.92) !important;
+    font-weight: 700;
+    letter-spacing: 0.6px;
     text-transform: uppercase;
-    flex: 1;
-}
-
-.persona-header > div:last-child {
-    flex: 0 0 8px;
-}
-
-.persona-desc {
     font-size: 11px;
-    color: #94a3b8;
-    line-height: 1.4;
 }
 
+.investor-selector-dropdown .Select-value {
+    line-height: 36px !important;
+}
+
+.investor-selector-dropdown .Select-input {
+    height: 36px !important;
+}
+
+.investor-selector-dropdown .Select-arrow-zone {
+    padding-right: 10px;
+}
+
+.investor-selector-dropdown .Select-arrow {
+    border-top-color: rgba(255,255,255,0.55) !important;
+}
+
+.investor-selector-dropdown .Select.is-open .Select-arrow {
+    border-top-color: rgba(102,252,241,0.75) !important;
+}
+
+.investor-selector-dropdown .Select-menu-outer {
+    margin-top: 6px;
+    border-radius: 12px;
+    overflow: hidden;
+
+    background: rgba(8, 10, 14, 0.95) !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
+    box-shadow: 0 14px 30px rgba(0,0,0,0.55);
+
+    z-index: 9999; /* keep above graphs */
+}
+
+.investor-selector-dropdown .Select-menu {
+    max-height: 220px;
+}
+
+.investor-selector-dropdown .Select-option {
+    background: transparent !important;
+    color: rgba(255,255,255,0.88) !important;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    transition: background var(--anim-fast) var(--ease-out), color var(--anim-fast) var(--ease-out);
+}
+
+.investor-selector-dropdown .Select-option:last-child {
+    border-bottom: none;
+}
+
+.investor-selector-dropdown .Select-option.is-focused {
+    background: rgba(102,252,241,0.10) !important;
+    color: rgba(255,255,255,0.98) !important;
+}
+
+.investor-selector-dropdown .Select-option.is-selected {
+    background: rgba(102,252,241,0.16) !important;
+    color: rgba(255,255,255,0.98) !important;
+}
 
 .map-container {
     flex: 0 0 auto;
@@ -587,4 +637,174 @@ body {
 .sidebar.sidebar--collapsed .sidebar-brand { display: none; }
 .sidebar.sidebar--collapsed .sidebar-brand-title::after { display: none; }
 .sidebar.sidebar--collapsed .sidebar-nav-label { display: none; }
+
 .sidebar.sidebar--collapsed .sidebar-panel-area { display: none; } /* panel hidden in collapsed rail mode */
+
+/* ---------------------------------
+   INVESTOR PROTOCOL – WEIGHTS SLIDERS
+   --------------------------------- */
+
+.weights-controls {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+.weights-hint {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.35;
+    margin-bottom: 10px;
+}
+
+.weights-sliders-container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* Each slider block should be wrapped by Main callback.
+   These rules will work as long as the wrapper has className="weight-slider" */
+.weight-slider {
+    padding: 12px 12px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.09);
+    background: rgba(0,0,0,0.22);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+}
+
+.weight-slider-label-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px; /* more breathing room above the slider */
+}
+
+.weight-slider-label {
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.96);
+    line-height: 1.2;
+}
+
+/* Ensure correct positioning context for the badge */
+.weight-slider {
+    position: relative;
+}
+
+.weight-slider-value {
+    position: absolute;
+    top: 10px;
+    right: 12px;
+
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    line-height: 1;
+
+    color: rgba(102,252,241,0.9) !important;
+
+    padding: 4px 8px;
+    border-radius: 999px;
+    border: 1px solid rgba(102,252,241,0.35);
+    background: rgba(102,252,241,0.08);
+
+    box-shadow: none;
+    min-width: 24px;
+    text-align: center;
+
+    opacity: 1 !important;
+    visibility: visible !important;
+}
+
+.weights-controls .weight-slider .weight-slider-label-row .weight-slider-value {
+    color: rgba(102,252,241,1) !important;
+}
+
+/* Make Dash Slider look like the rest of the UI */
+.weight-slider .rc-slider {
+    padding: 0 2px;
+    margin-top: 6px; /* more space between label row and slider */
+}
+
+.weight-slider .rc-slider-rail {
+    background-color: rgba(255,255,255,0.12);
+    height: 4px;
+}
+
+.weight-slider .rc-slider-track {
+    background-color: rgba(102,252,241,0.85);
+    height: 4px;
+}
+
+.weight-slider .rc-slider-handle {
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    background: rgba(15, 23, 42, 0.95);
+    border: 2px solid rgba(102,252,241,0.9);
+    box-shadow: 0 0 10px rgba(102,252,241,0.22);
+}
+
+.weight-slider .rc-slider-handle:focus,
+.weight-slider .rc-slider-handle:active,
+.weight-slider .rc-slider-handle:hover {
+    border-color: rgba(102,252,241,1);
+    box-shadow: 0 0 14px rgba(102,252,241,0.34);
+}
+
+.weight-slider .rc-slider-mark-text {
+    color: rgba(255,255,255,0.55);
+    font-size: 10px;
+}
+
+.weight-slider .rc-slider-dot {
+    border-color: rgba(255,255,255,0.20);
+    background: rgba(0,0,0,0.25);
+}
+
+.weight-slider .rc-slider-dot-active {
+    border-color: rgba(102,252,241,0.6);
+}
+
+.weights-apply-btn {
+    width: 100%;
+    margin-top: 12px;
+    padding: 10px 12px;
+    border-radius: 12px;
+    border: 1px solid rgba(102,252,241,0.28);
+    background: linear-gradient(90deg, rgba(102,252,241,0.14), rgba(102,252,241,0.05));
+    color: rgba(255,255,255,0.95);
+    font-weight: 800;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition:
+        transform var(--anim-fast) var(--ease-out),
+        background var(--anim-fast) var(--ease-out),
+        border-color var(--anim-fast) var(--ease-out),
+        box-shadow var(--anim-fast) var(--ease-out);
+}
+
+.weights-apply-btn:hover {
+    transform: translateY(-1px);
+    border-color: rgba(102,252,241,0.55);
+    background: linear-gradient(90deg, rgba(102,252,241,0.18), rgba(102,252,241,0.07));
+    box-shadow: 0 0 14px rgba(102,252,241,0.16);
+}
+
+.weights-apply-btn:active {
+    transform: translateY(0);
+}
+
+/* In collapsed rail mode, the panel is hidden anyway, but keep it safe */
+.sidebar.sidebar--collapsed .weights-controls {
+    display: none;
+}

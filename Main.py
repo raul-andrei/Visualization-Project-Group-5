@@ -191,18 +191,17 @@ class Main:
             )
 
         # -----------------------------
-        # Persona selection (SIDEBAR is the ONLY source of truth)
+        # Persona selection (SIDEBAR dropdown is the source of truth)
         # -----------------------------
         @self.app.callback(
             Output("selected-persona-store", "data"),
-            Input({"type": "persona-card", "index": ALL}, "n_clicks"),
+            Input("persona-dropdown", "value"),
             State("selected-persona-store", "data"),
-            prevent_initial_call=True,
         )
-        def set_persona_from_sidebar(_clicks, current_persona):
-            trigger = ctx.triggered_id
-            if isinstance(trigger, dict) and trigger.get("type") == "persona-card":
-                return trigger.get("index", "real_estate")
+        def set_persona_from_dropdown(value, current_persona):
+            # When dropdown exists, it drives the persona selection
+            if value:
+                return value
             return current_persona or "real_estate"
 
         # -----------------------------
@@ -230,13 +229,18 @@ class Main:
                 slider_nodes.append(
                     html.Div(
                         className="weight-slider",
-                        style={"marginBottom": "10px"},
                         children=[
                             html.Div(
-                                style={"display": "flex", "justifyContent": "space-between", "fontSize": "12px"},
+                                className="weight-slider-header",
                                 children=[
-                                    html.Span(label, style={"color": "#fff"}),
-                                    html.Span(id={"type": "weight-value", "col": col}, style={"color": "#aaa"}),
+                                    html.Span(
+                                        label,
+                                        className="weight-slider-label",
+                                    ),
+                                    html.Span(
+                                        id={"type": "weight-value", "col": col},
+                                        className="weight-slider-value",
+                                    ),
                                 ],
                             ),
                             dcc.Slider(
@@ -247,6 +251,7 @@ class Main:
                                 value=3,
                                 marks={1: "1", 2: "2", 3: "3", 4: "4", 5: "5"},
                                 tooltip={"placement": "bottom", "always_visible": False},
+                                className="weight-slider-control",
                             ),
                         ],
                     )
