@@ -21,16 +21,16 @@ scoring_df = load_and_process_data()
 # -----------------------------
 # Styling
 # -----------------------------
-BLUE_PURPLE_SCALE = [
-    [0.00, "#0b132b"],  # very dark blue (almost background)
-    [0.10, "#1c2541"],
-    [0.20, "#2a2f6f"],
-    [0.35, "#3b3f8c"],
-    [0.50, "#4b4ea3"],
-    [0.65, "#5f5fc4"],
-    [0.80, "#7b6ee6"],
-    [0.90, "#9b7cff"],
-    [1.00, "#b98bff"],  # sharp blue-purple
+GREEN_SCALE = [
+    [0.00, "#0b1311"], 
+    [0.10, "#10231f"],
+    [0.20, "#163a33"],
+    [0.35, "#1f5c52"],
+    [0.50, "#2a7f72"],
+    [0.65, "#38a89a"],
+    [0.80, "#4fd1c5"],
+    [0.90, "#66fcf1"],
+    [1.00, "#8ffdf4"],
 ]
 
 
@@ -117,18 +117,17 @@ class Main:
     def register_callbacks(self):
 
         # -----------------------------
-        # Sidebar state: collapse + active panel
+        # Sidebar state: collapse only
         # -----------------------------
         @self.app.callback(
             Output("sidebar-state", "data"),
             Input("sidebar-collapse-btn", "n_clicks"),
-            Input({"type": "sidebar-nav", "index": ALL}, "n_clicks"),
             State("sidebar-state", "data"),
             prevent_initial_call=True,
         )
-        def update_sidebar_state(collapse_clicks, nav_clicks, state):
+        def update_sidebar_state(collapse_clicks, state):
             if state is None:
-                state = {"collapsed": False, "active": "investors"}
+                state = {"collapsed": False}
 
             trigger = ctx.triggered_id
             if trigger is None:
@@ -138,31 +137,18 @@ class Main:
                 state["collapsed"] = not state.get("collapsed", False)
                 return state
 
-            if isinstance(trigger, dict) and trigger.get("type") == "sidebar-nav":
-                state["active"] = trigger.get("index")
-                if state.get("collapsed", False):
-                    state["collapsed"] = False
-                return state
-
             raise PreventUpdate
 
         @self.app.callback(
             Output("sidebar-wrapper", "className"),
-            Output({"type": "sidebar-nav", "index": "investors"}, "className"),
-            Output({"type": "sidebar-nav", "index": "geo"}, "className"),
-            Output({"type": "sidebar-nav", "index": "bookmarks"}, "className"),
-            Output("sidebar-panel-investors", "className"),
-            Output("sidebar-panel-geo", "className"),
-            Output("sidebar-panel-bookmarks", "className"),
             Output("map-and-analytics-container", "className"),
             Input("sidebar-state", "data"),
         )
         def apply_sidebar_classes(state):
             if not state:
-                state = {"collapsed": False, "active": "investors"}
+                state = {"collapsed": False}
 
             collapsed = state.get("collapsed", False)
-            active = state.get("active", "investors")
 
             sidebar_class = "sidebar sidebar--collapsed" if collapsed else "sidebar"
             content_class = (
@@ -171,24 +157,7 @@ class Main:
                 "map-and-analytics-container"
             )
 
-            def panel_class(key):
-                base = "sidebar-panel"
-                return f"{base} sidebar-panel--active" if active == key else base
-
-            def nav_class(key):
-                base = "sidebar-nav-item"
-                return f"{base} sidebar-nav-item--active" if active == key else base
-
-            return (
-                sidebar_class,
-                nav_class("investors"),
-                nav_class("geo"),
-                nav_class("bookmarks"),
-                panel_class("investors"),
-                panel_class("geo"),
-                panel_class("bookmarks"),
-                content_class,
-            )
+            return sidebar_class, content_class
 
         # -----------------------------
         # Persona selection (SIDEBAR dropdown is the source of truth)
@@ -325,7 +294,7 @@ class Main:
                 color=score_col,
                 hover_name="Country",
                 title=f"<b>{self.PERSONAS[persona]['name']}</b>",
-                color_continuous_scale=BLUE_PURPLE_SCALE,
+                color_continuous_scale=GREEN_SCALE,
             )
 
             fig.update_traces(
@@ -385,8 +354,10 @@ class Main:
                 x="Country",
                 y=score_col,
                 title=f"Top 5 — {self.PERSONAS[persona]['name']}",
+                color_discrete_sequence=["#1a5a52"],
             )
             bar_fig = self._dark_fig_layout(bar_fig)
+            
             return dcc.Graph(figure=bar_fig, config={"displayModeBar": False})
 
         # -----------------------------
@@ -541,7 +512,7 @@ class Main:
         return html.Div(
             className="app-container",
             children=[
-                dcc.Store(id="sidebar-state", data={"collapsed": False, "active": "investors"}),
+                dcc.Store(id="sidebar-state", data={"collapsed": False}),
                 dcc.Store(id="plotly-resize-signal", data=0),
 
                 # Selection state

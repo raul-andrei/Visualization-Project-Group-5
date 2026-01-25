@@ -28,20 +28,6 @@ class AnalyticsPanel:
                             ]
                         ),
 
-                        # TAB 2: COMPARISON
-                        dcc.Tab(
-                            label='COMPARISON ENGINE',
-                            value='tab-2',
-                            className='tab',
-                            selected_className='tab--selected',
-                            children=[
-                                html.Div(
-                                    id='comparison-radar',
-                                    style={'padding': '20px', 'color': 'white'},
-                                    children="Placeholder: Radar Chart will render here."
-                                )
-                            ]
-                        ),
 
                         # TAB 3: COUNTRY DRILLDOWN
                         dcc.Tab(

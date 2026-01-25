@@ -7,23 +7,18 @@ class Sidebar:
         self.PERSONAS = {
             "real_estate": {
                 "name": "REAL ESTATE",
-                "color": "#66fcf1",
             },
             "agriculture": {
                 "name": "AGRICULTURE",
-                "color": "#22c55e",
             },
             "logistics": {
                 "name": "TRANSPORT & LOGISTICS",
-                "color": "#fb923c",
             },
             "telecom": {
                 "name": "TELECOM",
-                "color": "#d946ef",
             },
             "fintech": {
                 "name": "FINANCIAL SERVICES",
-                "color": "#3b82f6",
             },
         }
 
@@ -31,10 +26,10 @@ class Sidebar:
         """Returns the full sidebar layout (icon rail + expandable panel)."""
         return html.Div(
             id="sidebar-wrapper",
-            className="sidebar",  # CSS will later switch to 'sidebar sidebar--collapsed'
+            className="sidebar",
             children=[
                 self.render_topbar(),
-                self.render_nav_rail(),
+                html.Div(className="sidebar-divider"),
                 self.render_panel_area(),
             ],
         )
@@ -63,30 +58,6 @@ class Sidebar:
             ],
         )
 
-    def render_nav_rail(self):
-        """Icon rail that is always visible (expanded: icon + label via CSS; collapsed: icon only)."""
-        return html.Div(
-            className="sidebar-nav",
-            children=[
-                self._nav_item("investors", "/assets/icons/investors.png", "Investor Protocol"),
-                self._nav_item("geo", "/assets/icons/geo.png", "Geographic Filter"),
-                self._nav_item("bookmarks", "/assets/icons/bookmarks.png", "Bookmarks"),
-            ],
-        )
-
-    def _nav_item(self, key: str, icon: str, label: str):
-        """One nav item. We use a real button so it has n_clicks for callbacks."""
-        return html.Button(
-            children=[
-                html.Img(src=icon, className="sidebar-nav-icon"),
-                html.Span(label, className="sidebar-nav-label"),
-            ],
-            id={"type": "sidebar-nav", "index": key},
-            className="sidebar-nav-item",  # callback can add 'sidebar-nav-item sidebar-nav-item--active'
-            n_clicks=0,
-            title=label,  # tooltip (important in collapsed mode)
-        )
-
     # -------------------------
     # Panel area (expanded content)
     # -------------------------
@@ -96,10 +67,7 @@ class Sidebar:
             id="sidebar-panel-area",
             className="sidebar-panel-area",
             children=[
-                html.Div(className="sidebar-divider"),
                 self.render_panel_investors(),
-                self.render_panel_geo(),
-                self.render_panel_bookmarks(),
             ],
         )
 
@@ -126,14 +94,29 @@ class Sidebar:
                     ],
                 ),
 
+                html.Div(className="sidebar-divider"),
+
                 # Sliders will be rendered dynamically depending on the selected persona
                 html.Div(
                     id="weights-controls",
                     className="weights-controls",
                     children=[
                         html.Div(
-                            "Adjust attribute importance (1–5), then press Apply.",
-                            className="weights-hint",
+                            className="weights-hint-row",
+                            children=[
+                                html.Div(
+                                    "Adjust attribute importance (1–5), then press Apply.",
+                                    className="weights-hint",
+                                ),
+                                html.Span(
+                                    "i",
+                                    className="weights-info-icon",
+                                    **{"data-tooltip": (
+                                        "Country scores are calculated using only the selected attributes, weighted according to your preferences."
+                                        " Adjusting weights directly affects rankings and map colors."
+                                    )},
+                                ),
+                            ],
                         ),
                         html.Div(
                             id="weights-sliders-container",
@@ -147,39 +130,6 @@ class Sidebar:
                             className="weights-apply-btn",
                         ),
                     ],
-                ),
-            ],
-        )
-
-    def render_panel_geo(self):
-        return html.Div(
-            id="sidebar-panel-geo",
-            className="sidebar-panel",  # hidden by default until selected
-            children=[
-                dcc.Dropdown(
-                    id="geo-filter",
-                    options=[
-                        {"label": "Global View", "value": "Global View"},
-                        {"label": "North America", "value": "North America"},
-                        {"label": "Europe", "value": "Europe"},
-                        {"label": "Asia Pacific", "value": "Asia Pacific"},
-                    ],
-                    value="Global View",
-                    clearable=False,
-                    className="custom-dropdown",
-                ),
-            ],
-        )
-
-    def render_panel_bookmarks(self):
-        # Placeholder: you will implement later.
-        return html.Div(
-            id="sidebar-panel-bookmarks",
-            className="sidebar-panel",
-            children=[
-                html.Div(
-                    "Coming soon: save countries to a shortlist for later comparison.",
-                    className="sidebar-placeholder",
                 ),
             ],
         )
