@@ -117,6 +117,29 @@ class Sidebar:
                     className="persona-container",
                     children=[self.build_card(key, data) for key, data in self.PERSONAS.items()],
                 ),
+
+                # Sliders will be rendered dynamically depending on the selected persona
+                html.Div(
+                    id="weights-controls",
+                    className="weights-controls",
+                    children=[
+                        html.Div(
+                            "Adjust attribute importance (1–5), then press Apply.",
+                            className="weights-hint",
+                        ),
+                        html.Div(
+                            id="weights-sliders-container",
+                            className="weights-sliders-container",
+                            children=[],
+                        ),
+                        html.Button(
+                            "Apply",
+                            id="apply-weights-btn",
+                            n_clicks=0,
+                            className="weights-apply-btn",
+                        ),
+                    ],
+                ),
             ],
         )
 

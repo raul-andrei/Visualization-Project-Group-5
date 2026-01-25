@@ -1,4 +1,4 @@
-from dash import Dash, Input, Output, State, html, ctx, ALL, dcc
+from dash import Dash, Input, Output, State, html, ctx, ALL, dcc, no_update
 from dash.exceptions import PreventUpdate
 
 from UI_Components.Sidebar import Sidebar
@@ -6,13 +6,11 @@ from UI_Components.MapView import MapView
 from UI_Components.AnalyticsPanel import AnalyticsPanel
 
 from scoring import load_and_process_data
-from UTILS.helpers_breakdown import build_breakdown
+from UTILS.weighted_scoring import compute_weighted_score, build_score_breakdown_for_country, PERSONA_FEATURES
 
 from plotly import express as px
 from plotly import graph_objects as go
 
-import pandas as pd
-import numpy as np
 
 
 # -----------------------------
@@ -23,13 +21,16 @@ scoring_df = load_and_process_data()
 # -----------------------------
 # Styling
 # -----------------------------
-PINK_SCALE = [
-    [0.0, "#2b1d24"],   # very dark gray-pink
-    [0.2, "#4a2130"],
-    [0.4, "#6a2540"],
-    [0.6, "#8e2a58"],
-    [0.8, "#c13586"],
-    [1.0, "#ff4fc3"],   # sharp pink
+BLUE_PURPLE_SCALE = [
+    [0.00, "#0b132b"],  # very dark blue (almost background)
+    [0.10, "#1c2541"],
+    [0.20, "#2a2f6f"],
+    [0.35, "#3b3f8c"],
+    [0.50, "#4b4ea3"],
+    [0.65, "#5f5fc4"],
+    [0.80, "#7b6ee6"],
+    [0.90, "#9b7cff"],
+    [1.00, "#b98bff"],  # sharp blue-purple
 ]
 
 
@@ -39,21 +40,14 @@ PINK_SCALE = [
 # -----------------------------
 class Main:
     def __init__(self):
-        self.app = Dash(__name__)
+        self.app = Dash(__name__, suppress_callback_exceptions=True)
         self.app.title = "NEXUS SCOUT"
 
         self.sidebar = Sidebar()
         self.map_view = MapView()
         self.analytics_panel = AnalyticsPanel()
 
-        self.PERSONA_TO_SCORE = {
-            "real_estate": "RE_Opp",
-            "agriculture": "Ag_Opp",
-            "logistics": "Logistics_Opp",
-            "telecom": "Telecom_Opp",
-            "fintech": "Fintech_Opp",
-            "retail": "Retail_Opp",
-        }
+
 
         # Use the same personas dict as Sidebar
         self.PERSONAS = self.sidebar.PERSONAS
@@ -113,6 +107,11 @@ class Main:
         fig.update_xaxes(color="white", gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.12)")
         fig.update_yaxes(color="white", gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.12)")
         return fig
+
+    def _default_weights_for_persona(self, persona: str) -> dict:
+        """Default importance weights (1-5) for each of the 6 attributes of the persona."""
+        feats = PERSONA_FEATURES.get(persona, [])
+        return {f["col"]: 3 for f in feats}
 
     # ---------- Callbacks ----------
     def register_callbacks(self):
@@ -207,20 +206,110 @@ class Main:
             return current_persona or "real_estate"
 
         # -----------------------------
-        # Map updates based on persona store
+        # Persona sliders (draft + apply)
+        # -----------------------------
+        @self.app.callback(
+            Output("weights-sliders-container", "children"),
+            Output("weights-draft-store", "data", allow_duplicate=True),
+            Output("weights-applied-store", "data", allow_duplicate=True),
+            Input("selected-persona-store", "data"),
+            prevent_initial_call="initial_duplicate",
+        )
+        def render_persona_sliders(persona):
+            persona = persona or "real_estate"
+            feats = PERSONA_FEATURES.get(persona, [])
+
+            # Default all to 3
+            defaults = {str(f["col"]): 3 for f in feats}
+
+            slider_nodes = []
+            for f in feats:
+                col = str(f["col"])
+                label = str(f.get("label", col))
+
+                slider_nodes.append(
+                    html.Div(
+                        className="weight-slider",
+                        style={"marginBottom": "10px"},
+                        children=[
+                            html.Div(
+                                style={"display": "flex", "justifyContent": "space-between", "fontSize": "12px"},
+                                children=[
+                                    html.Span(label, style={"color": "#fff"}),
+                                    html.Span(id={"type": "weight-value", "col": col}, style={"color": "#aaa"}),
+                                ],
+                            ),
+                            dcc.Slider(
+                                id={"type": "weight-slider", "col": col},
+                                min=1,
+                                max=5,
+                                step=1,
+                                value=3,
+                                marks={1: "1", 2: "2", 3: "3", 4: "4", 5: "5"},
+                                tooltip={"placement": "bottom", "always_visible": False},
+                            ),
+                        ],
+                    )
+                )
+
+            # Initialize both draft and applied to defaults whenever persona changes
+            return slider_nodes, defaults, defaults
+
+
+        @self.app.callback(
+            Output("weights-draft-store", "data"),
+            Output({"type": "weight-value", "col": ALL}, "children"),
+            Input({"type": "weight-slider", "col": ALL}, "value"),
+            State({"type": "weight-slider", "col": ALL}, "id"),
+            State("weights-draft-store", "data"),
+            prevent_initial_call=True,
+        )
+        def update_draft_weights(values, ids, current):
+            # Build a dict {col: value} from the pattern-matching IDs
+            current = current or {}
+            if not values or not ids:
+                raise PreventUpdate
+            new_weights = dict(current)
+
+            display_vals = []
+            for v, i in zip(values, ids):
+                col = str(i.get("col"))
+                new_weights[col] = int(v) if v is not None else 3
+                display_vals.append(str(new_weights[col]))
+
+            return new_weights, display_vals
+
+
+        @self.app.callback(
+            Output("weights-applied-store", "data", allow_duplicate=True),
+            Input("apply-weights-btn", "n_clicks"),
+            State("weights-draft-store", "data"),
+            prevent_initial_call=True,
+        )
+        def apply_weights(n_clicks, draft):
+            if not n_clicks:
+                raise PreventUpdate
+            return draft or {}
+
+        # -----------------------------
+        # Map updates based on persona store + applied weights
         # -----------------------------
         @self.app.callback(
             Output("world-map", "figure"),
             Input("selected-persona-store", "data"),
+            Input("weights-applied-store", "data"),
         )
-        def update_map_on_persona(persona):
+        def update_map_on_persona(persona, applied_weights):
             persona = persona or "real_estate"
-            score_col = self.PERSONA_TO_SCORE.get(persona)
-
-            if not score_col or score_col not in scoring_df.columns:
+            weights = applied_weights or self._default_weights_for_persona(persona)
+            try:
+                result = compute_weighted_score(scoring_df, persona, weights)
+            except Exception:
                 return self._empty_world_figure()
+            scored_df = result.scored_df
+            score_col = result.score_col  # "dyn_score"
 
-            df_plot = scoring_df[["Country", score_col]].dropna()
+            df_plot = scored_df[["Country", score_col]].dropna()
             if df_plot.empty:
                 return self._empty_world_figure()
 
@@ -231,7 +320,7 @@ class Main:
                 color=score_col,
                 hover_name="Country",
                 title=f"<b>{self.PERSONAS[persona]['name']}</b>",
-                color_continuous_scale=PINK_SCALE,
+                color_continuous_scale=BLUE_PURPLE_SCALE,
             )
 
             fig.update_traces(
@@ -257,28 +346,35 @@ class Main:
                 ),
                 font_color="white",
                 coloraxis=dict(
-                cmin=df_plot[score_col].min(),
-                cmax=df_plot[score_col].max(),
+                    cmin=df_plot[score_col].min(),
+                    cmax=df_plot[score_col].max(),
                 )
             )
 
             return fig
 
         # -----------------------------
-        # Top 5 uses persona store
+        # Top 5 uses persona store + applied weights
         # -----------------------------
         @self.app.callback(
             Output("top-5-chart", "children"),
             Input("selected-persona-store", "data"),
+            Input("weights-applied-store", "data"),
         )
-        def top5(persona):
+        def top5(persona, applied_weights):
             persona = persona or "real_estate"
-            score_col = self.PERSONA_TO_SCORE.get(persona)
+            weights = applied_weights or self._default_weights_for_persona(persona)
+            try:
+                result = compute_weighted_score(scoring_df, persona, weights)
+            except Exception:
+                return "No data"
+            scored_df = result.scored_df
+            score_col = result.score_col
 
-            if not score_col or score_col not in scoring_df.columns:
+            df_top = scored_df[["Country", score_col]].dropna().nlargest(5, score_col)
+            if df_top.empty:
                 return "No data"
 
-            df_top = scoring_df[["Country", score_col]].dropna().nlargest(5, score_col)
             bar_fig = px.bar(
                 df_top,
                 x="Country",
@@ -286,25 +382,6 @@ class Main:
                 title=f"Top 5 — {self.PERSONAS[persona]['name']}",
             )
             bar_fig = self._dark_fig_layout(bar_fig)
-
-            # Neural map scatter
-            if "PCA_1" in scoring_df.columns and "PCA_2" in scoring_df.columns:
-                df_scatter = scoring_df[["Country", score_col, "PCA_1", "PCA_2"]].dropna(subset=["PCA_1", "PCA_2", score_col])
-                scatter_fig = px.scatter(
-                    df_scatter,
-                    x="PCA_1",
-                    y="PCA_2",
-                    color=score_col,
-                    hover_name="Country",
-                    title=f"Neural Country Map — {self.PERSONAS[persona]['name']}",
-                )
-                scatter_fig = self._dark_fig_layout(scatter_fig)
-
-                return html.Div([
-                    dcc.Graph(figure=bar_fig, config={"displayModeBar": False}),
-                    dcc.Graph(figure=scatter_fig, config={"displayModeBar": False}),
-                ])
-
             return dcc.Graph(figure=bar_fig, config={"displayModeBar": False})
 
         # -----------------------------
@@ -332,7 +409,7 @@ class Main:
             raise PreventUpdate
 
         # -----------------------------
-        # Drilldown: selected country + selected persona -> waterfall + table
+        # Drilldown: selected country + selected persona + applied weights -> waterfall + table
         # -----------------------------
         @self.app.callback(
             Output("drilldown-country-title", "children"),
@@ -340,8 +417,9 @@ class Main:
             Output("drilldown-breakdown-table", "children"),
             Input("selected-country-store", "data"),
             Input("selected-persona-store", "data"),
+            Input("weights-applied-store", "data"),
         )
-        def render_country_drilldown(selected_country, persona):
+        def render_country_drilldown(selected_country, persona, applied_weights):
             persona = persona or "real_estate"
 
             if not selected_country:
@@ -361,8 +439,12 @@ class Main:
                     )],
                 )
                 return "No country selected", fig, ""
+            weights = applied_weights or self._default_weights_for_persona(persona)
+            result = compute_weighted_score(scoring_df, persona, weights)
+            scored_df = result.scored_df
+            score_col = result.score_col
 
-            hit = scoring_df[scoring_df["Country"].astype(str) == str(selected_country)]
+            hit = scored_df[scored_df["Country"].astype(str) == str(selected_country)]
             if hit.empty:
                 fig = go.Figure()
                 fig.update_layout(
@@ -382,7 +464,12 @@ class Main:
                 return f"Country not found: {selected_country}", fig, ""
 
             row = hit.iloc[0]
-            breakdown, final_score = build_breakdown(scoring_df, row, persona)
+            breakdown, final_score = build_score_breakdown_for_country(
+                scored_df,
+                persona,
+                result.weights_used,
+                str(selected_country),
+            )
 
             # Waterfall chart (transparent/dark)
             x = [r["factor"] for r in breakdown] + ["Final"]
@@ -405,19 +492,23 @@ class Main:
             # Table (white text, transparent background)
             header = html.Tr([
                 html.Th("Factor"),
-                html.Th("Value Used"),
+                html.Th("Normalized Value"),
                 html.Th("Weight"),
                 html.Th("Contribution"),
             ])
 
             body = []
             for r in breakdown:
-                body.append(html.Tr([
-                    html.Td(r["factor"]),
-                    html.Td(f"{r['value_used']:.2f}"),
-                    html.Td(f"{r['weight']:.2f}"),
-                    html.Td(f"{r['contribution']:.2f}"),
-                ]))
+                body.append(
+                    html.Tr(
+                        [
+                            html.Td(r["factor"]),
+                            html.Td(f"{float(r.get('normalized_value', 0.0)):.2f}"),
+                            html.Td(f"{float(r.get('weight', 0.0)):.2f}"),
+                            html.Td(f"{float(r.get('contribution', 0.0)):.2f}"),
+                        ]
+                    )
+                )
 
             body.append(html.Tr([
                 html.Td(html.B("Final Score")),
@@ -451,6 +542,10 @@ class Main:
                 # Selection state
                 dcc.Store(id="selected-country-store", storage_type="memory"),
                 dcc.Store(id="selected-persona-store", data="real_estate", storage_type="memory"),
+
+                # Slider weight state (draft updates immediately, applied updates only on Apply click)
+                dcc.Store(id="weights-draft-store", storage_type="memory"),
+                dcc.Store(id="weights-applied-store", storage_type="memory"),
 
                 self.sidebar.render(),
 
