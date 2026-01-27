@@ -1,4 +1,4 @@
-from dash import Dash, Input, Output, State, html, ctx, ALL, dcc, no_update
+from dash import Dash, Input, Output, State, html, ctx, ALL, dcc
 from dash.exceptions import PreventUpdate
 
 from UI_Components.Sidebar import Sidebar
@@ -6,11 +6,16 @@ from UI_Components.MapView import MapView
 from UI_Components.AnalyticsPanel import AnalyticsPanel
 
 from scoring import load_and_process_data
-from UTILS.weighted_scoring import compute_weighted_score, build_score_breakdown_for_country, PERSONA_FEATURES
+from UTILS.weighted_scoring import (
+    compute_weighted_score,
+    PERSONA_FEATURES,
+)
 
 from plotly import express as px
 from plotly import graph_objects as go
 
+import numpy as np
+import pandas as pd
 
 
 # -----------------------------
@@ -22,7 +27,7 @@ scoring_df = load_and_process_data()
 # Styling
 # -----------------------------
 GREEN_SCALE = [
-    [0.00, "#0b1311"], 
+    [0.00, "#0b1311"],
     [0.10, "#10231f"],
     [0.20, "#163a33"],
     [0.35, "#1f5c52"],
@@ -33,11 +38,33 @@ GREEN_SCALE = [
     [1.00, "#8ffdf4"],
 ]
 
+# Short labels (prevents stacked text in SPLOM/PCP)
+SHORT_LABELS = {
+    "GDP per Capita (USD)": "GDP/cap",
+    "Population": "Pop",
+    "Population Growth (%)": "Pop Growth",
+    "Net Migration Rate": "Migration",
+    "Unemployment (%)": "Unemp",
+    "Public Debt (% of GDP)": "Debt",
+    "Agricultural Area (km²)": "Ag Area",
+    "Irrigated Land (km²)": "Irrigation",
+    "Exports (B USD)": "Exports",
+    "Imports (B USD)": "Imports",
+    "Ag Area per Capita": "Ag/cap",
+    "Roadways (km)": "Roads",
+    "Railways (km)": "Rails",
+    "Airports (paved runways)": "Airports",
+    "Coastline (km)": "Coast",
+    "Internet Penetration": "Internet",
+    "Mobile Penetration": "Mobile",
+    "Broadband Penetration": "Broadband",
+    "Electricity Capacity (kW)": "Electricity",
+    "Internet Users (Scale)": "Users",
+    "Broadband Subs (Scale)": "Broad Subs",
+    "GDP Growth (%)": "GDP Growth",
+}
 
 
-# -----------------------------
-# App
-# -----------------------------
 class Main:
     def __init__(self):
         self.app = Dash(__name__, suppress_callback_exceptions=True)
@@ -47,9 +74,6 @@ class Main:
         self.map_view = MapView()
         self.analytics_panel = AnalyticsPanel()
 
-
-
-        # Use the same personas dict as Sidebar
         self.PERSONAS = self.sidebar.PERSONAS
 
         self.app.layout = self.setup_layout()
@@ -91,9 +115,6 @@ class Main:
         return fig
 
     def _dark_fig_layout(self, fig: go.Figure, title: str = None):
-        """
-        Applies consistent dark/transparent styling to any chart so you don't get white boxes.
-        """
         if title:
             fig.update_layout(title=title)
 
@@ -103,15 +124,78 @@ class Main:
             font=dict(family="Inter, sans-serif", color="white"),
             margin=dict(l=10, r=10, t=60, b=10),
         )
-        # Make axis text white (for non-geo charts)
-        fig.update_xaxes(color="white", gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.12)")
-        fig.update_yaxes(color="white", gridcolor="rgba(255,255,255,0.08)", zerolinecolor="rgba(255,255,255,0.12)")
+        fig.update_xaxes(
+            color="white",
+            gridcolor="rgba(255,255,255,0.08)",
+            zerolinecolor="rgba(255,255,255,0.12)",
+        )
+        fig.update_yaxes(
+            color="white",
+            gridcolor="rgba(255,255,255,0.08)",
+            zerolinecolor="rgba(255,255,255,0.12)",
+        )
         return fig
 
     def _default_weights_for_persona(self, persona: str) -> dict:
-        """Default importance weights (1-5) for each of the 6 attributes of the persona."""
         feats = PERSONA_FEATURES.get(persona, [])
-        return {f["col"]: 3 for f in feats}
+        return {str(f["col"]): 3 for f in feats}
+
+    def _empty_message_fig(self, text: str):
+        fig = go.Figure()
+        fig.update_layout(
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="white"),
+            xaxis=dict(visible=False),
+            yaxis=dict(visible=False),
+            margin=dict(l=10, r=10, t=10, b=10),
+            annotations=[
+                dict(
+                    text=text,
+                    showarrow=False,
+                    x=0.5,
+                    y=0.5,
+                    xref="paper",
+                    yref="paper",
+                    font=dict(color="white", size=14),
+                )
+            ],
+        )
+        return fig
+
+    def _subset_nearest(
+        self,
+        scored_df: pd.DataFrame,
+        selected_country: str,
+        score_col: str,
+        n: int = 60,
+    ) -> pd.DataFrame:
+        selected_country = str(selected_country)
+
+        if "PCA_1" in scored_df.columns and "PCA_2" in scored_df.columns:
+            hit = scored_df[scored_df["Country"].astype(str) == selected_country]
+            if not hit.empty:
+                x0 = float(hit.iloc[0]["PCA_1"])
+                y0 = float(hit.iloc[0]["PCA_2"])
+                df2 = scored_df.copy()
+                df2["_dist"] = (df2["PCA_1"].astype(float) - x0) ** 2 + (df2["PCA_2"].astype(float) - y0) ** 2
+                df2 = df2.sort_values("_dist", ascending=True)
+                sub = df2.head(n + 1).drop(columns=["_dist"], errors="ignore")
+                return sub
+
+        sub = scored_df.sort_values(score_col, ascending=False).head(n).copy()
+        if selected_country not in sub["Country"].astype(str).values:
+            hit = scored_df[scored_df["Country"].astype(str) == selected_country]
+            if not hit.empty:
+                sub = pd.concat([hit, sub], ignore_index=True).drop_duplicates(subset=["Country"])
+        return sub
+
+    def _safe_numeric_series(self, s: pd.Series, default: float = 0.0) -> pd.Series:
+        return (
+            pd.to_numeric(s, errors="coerce")
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(default)
+        )
 
     # ---------- Callbacks ----------
     def register_callbacks(self):
@@ -129,15 +213,11 @@ class Main:
             if state is None:
                 state = {"collapsed": False}
 
-            trigger = ctx.triggered_id
-            if trigger is None:
+            if ctx.triggered_id != "sidebar-collapse-btn":
                 raise PreventUpdate
 
-            if trigger == "sidebar-collapse-btn":
-                state["collapsed"] = not state.get("collapsed", False)
-                return state
-
-            raise PreventUpdate
+            state["collapsed"] = not state.get("collapsed", False)
+            return state
 
         @self.app.callback(
             Output("sidebar-wrapper", "className"),
@@ -153,14 +233,13 @@ class Main:
             sidebar_class = "sidebar sidebar--collapsed" if collapsed else "sidebar"
             content_class = (
                 "map-and-analytics-container map-and-analytics-container--collapsed"
-                if collapsed else
-                "map-and-analytics-container"
+                if collapsed
+                else "map-and-analytics-container"
             )
-
             return sidebar_class, content_class
 
         # -----------------------------
-        # Persona selection (SIDEBAR dropdown is the source of truth)
+        # Persona selection
         # -----------------------------
         @self.app.callback(
             Output("selected-persona-store", "data"),
@@ -168,7 +247,6 @@ class Main:
             State("selected-persona-store", "data"),
         )
         def set_persona_from_dropdown(value, current_persona):
-            # When dropdown exists, it drives the persona selection
             if value:
                 return value
             return current_persona or "real_estate"
@@ -186,8 +264,6 @@ class Main:
         def render_persona_sliders(persona):
             persona = persona or "real_estate"
             feats = PERSONA_FEATURES.get(persona, [])
-
-            # Default all to 3
             defaults = {str(f["col"]): 3 for f in feats}
 
             slider_nodes = []
@@ -202,10 +278,7 @@ class Main:
                             html.Div(
                                 className="weight-slider-header",
                                 children=[
-                                    html.Span(
-                                        label,
-                                        className="weight-slider-label",
-                                    ),
+                                    html.Span(label, className="weight-slider-label"),
                                     html.Span(
                                         id={"type": "weight-value", "col": col},
                                         className="weight-slider-value",
@@ -226,9 +299,7 @@ class Main:
                     )
                 )
 
-            # Initialize both draft and applied to defaults whenever persona changes
             return slider_nodes, defaults, defaults
-
 
         @self.app.callback(
             Output("weights-draft-store", "data"),
@@ -239,20 +310,19 @@ class Main:
             prevent_initial_call=True,
         )
         def update_draft_weights(values, ids, current):
-            # Build a dict {col: value} from the pattern-matching IDs
             current = current or {}
             if not values or not ids:
                 raise PreventUpdate
-            new_weights = dict(current)
 
+            new_weights = dict(current)
             display_vals = []
+
             for v, i in zip(values, ids):
                 col = str(i.get("col"))
                 new_weights[col] = int(v) if v is not None else 3
                 display_vals.append(str(new_weights[col]))
 
             return new_weights, display_vals
-
 
         @self.app.callback(
             Output("weights-applied-store", "data", allow_duplicate=True),
@@ -266,7 +336,7 @@ class Main:
             return draft or {}
 
         # -----------------------------
-        # Map updates based on persona store + applied weights
+        # Map updates
         # -----------------------------
         @self.app.callback(
             Output("world-map", "figure"),
@@ -276,12 +346,14 @@ class Main:
         def update_map_on_persona(persona, applied_weights):
             persona = persona or "real_estate"
             weights = applied_weights or self._default_weights_for_persona(persona)
+
             try:
                 result = compute_weighted_score(scoring_df, persona, weights)
             except Exception:
                 return self._empty_world_figure()
+
             scored_df = result.scored_df
-            score_col = result.score_col  # "dyn_score"
+            score_col = result.score_col
 
             df_plot = scored_df[["Country", score_col]].dropna()
             if df_plot.empty:
@@ -320,15 +392,14 @@ class Main:
                 ),
                 font_color="white",
                 coloraxis=dict(
-                    cmin=df_plot[score_col].min(),
-                    cmax=df_plot[score_col].max(),
-                )
+                    cmin=float(df_plot[score_col].min()),
+                    cmax=float(df_plot[score_col].max()),
+                ),
             )
-
             return fig
 
         # -----------------------------
-        # Top 5 uses persona store + applied weights
+        # Top 5
         # -----------------------------
         @self.app.callback(
             Output("top-5-chart", "children"),
@@ -338,10 +409,12 @@ class Main:
         def top5(persona, applied_weights):
             persona = persona or "real_estate"
             weights = applied_weights or self._default_weights_for_persona(persona)
+
             try:
                 result = compute_weighted_score(scoring_df, persona, weights)
             except Exception:
                 return "No data"
+
             scored_df = result.scored_df
             score_col = result.score_col
 
@@ -354,14 +427,12 @@ class Main:
                 x="Country",
                 y=score_col,
                 title=f"Top 5 — {self.PERSONAS[persona]['name']}",
-                color_discrete_sequence=["#1a5a52"],
             )
             bar_fig = self._dark_fig_layout(bar_fig)
-            
             return dcc.Graph(figure=bar_fig, config={"displayModeBar": False})
 
         # -----------------------------
-        # Country click -> store selected country
+        # Country click -> store
         # -----------------------------
         @self.app.callback(
             Output("selected-country-store", "data"),
@@ -373,139 +444,178 @@ class Main:
                 raise PreventUpdate
 
             p = clickData["points"][0]
-
-            # Choropleth commonly uses "location" for the clicked region
             if p.get("location"):
                 return str(p["location"])
-
-            # Fallback
             if p.get("text"):
                 return str(p["text"])
-
             raise PreventUpdate
 
         # -----------------------------
-        # Drilldown: selected country + selected persona + applied weights -> waterfall + table
+        # Drilldown: SPLOM + PCP (CLEAN VERSION)
         # -----------------------------
         @self.app.callback(
             Output("drilldown-country-title", "children"),
-            Output("drilldown-breakdown-chart", "figure"),
-            Output("drilldown-breakdown-table", "children"),
+            Output("drilldown-investor-label", "children"),
+            Output("drilldown-splom", "figure"),
+            Output("drilldown-pcp", "figure"),
             Input("selected-country-store", "data"),
             Input("selected-persona-store", "data"),
             Input("weights-applied-store", "data"),
         )
         def render_country_drilldown(selected_country, persona, applied_weights):
-            persona = persona or "real_estate"
+            try:
+                persona = persona or "real_estate"
+                investor_label = self.PERSONAS.get(persona, {"name": persona}).get("name", persona)
 
-            if not selected_country:
-                fig = go.Figure()
-                fig.update_layout(
+                if not selected_country:
+                    return (
+                        "Click a country on the map",
+                        investor_label,
+                        self._empty_message_fig("Click a country to show SPLOM."),
+                        self._empty_message_fig("Click a country to show PCP."),
+                    )
+
+                weights = applied_weights or self._default_weights_for_persona(persona)
+
+                result = compute_weighted_score(scoring_df, persona, weights)
+                scored_df = result.scored_df
+                score_col = result.score_col
+
+                hit = scored_df[scored_df["Country"].astype(str) == str(selected_country)]
+                if hit.empty:
+                    msg = f"Country not found: {selected_country}"
+                    return msg, investor_label, self._empty_message_fig(msg), self._empty_message_fig(msg)
+
+                # Comparison set
+                df_sub = self._subset_nearest(scored_df, str(selected_country), score_col, n=60).copy()
+
+                # Persona feature defs
+                defs = PERSONA_FEATURES.get(persona, [])
+                norm_cols = [f"dyn_norm__{d['col']}" for d in defs]
+
+                # Long labels -> short labels
+                long_labels = [str(d.get("label", d["col"])) for d in defs]
+                labels = [SHORT_LABELS.get(l, l) for l in long_labels]
+
+                # Ensure norm columns exist and build display columns (0..100)
+                for c in norm_cols:
+                    if c not in df_sub.columns:
+                        df_sub[c] = 0.0
+
+                for c, lab in zip(norm_cols, labels):
+                    df_sub[lab] = (
+                        self._safe_numeric_series(df_sub[c], default=0.0)
+                        .clip(0, 1)
+                        * 100.0
+                    )
+
+                # Make sure score_col is numeric for coloring
+                df_sub[score_col] = self._safe_numeric_series(df_sub[score_col], default=0.0)
+
+                # Header title (shown in your H3)
+                title = f"{selected_country} — {investor_label} | Compare: {len(df_sub)}"
+
+                # ---------- SPLOM (clean) ----------
+                splom_fig = px.scatter_matrix(
+                    df_sub,
+                    dimensions=labels,
+                    color=score_col,
+                    hover_name="Country",
+                    color_continuous_scale=GREEN_SCALE,
+                )
+
+                # Cleaner matrix
+                splom_fig.update_traces(
+                    diagonal_visible=False,
+                    showupperhalf=False,
+                    showlowerhalf=True,
+                    marker=dict(size=5, opacity=0.55),
+                )
+
+                # Highlight selected strongly
+                sel_mask = df_sub["Country"].astype(str).values == str(selected_country)
+                if len(splom_fig.data) > 0:
+                    sizes = np.where(sel_mask, 12, 5)
+                    splom_fig.data[0].update(marker=dict(size=sizes, opacity=0.65))
+
+                splom_fig.update_layout(
+                    title=None,  # avoid duplicate title inside plot
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="white"),
-                    xaxis=dict(visible=False),
-                    yaxis=dict(visible=False),
+                    font=dict(family="Inter, sans-serif", color="white", size=11),
                     margin=dict(l=10, r=10, t=10, b=10),
-                    annotations=[dict(
-                        text="Click a country on the map.",
-                        showarrow=False,
-                        x=0.5, y=0.5,
-                        font=dict(color="white")
-                    )],
+                    coloraxis_showscale=False,  # keep only PCP colorbar
                 )
-                return "No country selected", fig, ""
-            weights = applied_weights or self._default_weights_for_persona(persona)
-            result = compute_weighted_score(scoring_df, persona, weights)
-            scored_df = result.scored_df
-            score_col = result.score_col
+                splom_fig.update_xaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)")
+                splom_fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)")
 
-            hit = scored_df[scored_df["Country"].astype(str) == str(selected_country)]
-            if hit.empty:
-                fig = go.Figure()
-                fig.update_layout(
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(color="white"),
-                    xaxis=dict(visible=False),
-                    yaxis=dict(visible=False),
-                    margin=dict(l=10, r=10, t=10, b=10),
-                    annotations=[dict(
-                        text=f"Country not found: {selected_country}",
-                        showarrow=False,
-                        x=0.5, y=0.5,
-                        font=dict(color="white")
-                    )],
-                )
-                return f"Country not found: {selected_country}", fig, ""
+                # ---------- PCP (reduce spaghetti) ----------
+                df_sub_sorted = df_sub.sort_values(score_col, ascending=False).copy()
+                top = df_sub_sorted.head(20)
+                bottom = df_sub_sorted.tail(10)
+                sel = df_sub_sorted[df_sub_sorted["Country"].astype(str) == str(selected_country)]
+                pcp_df = pd.concat([top, bottom, sel], ignore_index=True).drop_duplicates(subset=["Country"])
 
-            row = hit.iloc[0]
-            breakdown, final_score = build_score_breakdown_for_country(
-                scored_df,
-                persona,
-                result.weights_used,
-                str(selected_country),
-            )
+                dims = [
+                    dict(label=lab, range=[0, 100], values=self._safe_numeric_series(pcp_df[lab], 0.0).values)
+                    for lab in labels
+                ]
 
-            # Waterfall chart (transparent/dark)
-            x = [r["factor"] for r in breakdown] + ["Final"]
-            y = [r["contribution"] for r in breakdown] + [final_score]
-            measure = ["relative"] * len(breakdown) + ["total"]
+                pcp_fig = go.Figure()
 
-            fig = go.Figure(go.Waterfall(x=x, y=y, measure=measure))
-            fig.update_layout(
-                title=f"{row['Country']} — {self.PERSONAS.get(persona, {'name': persona})['name']} Score: {final_score:.2f}",
-                title_font=dict(family="Inter, sans-serif", size=18, color="white"),
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(0,0,0,0)",
-                font=dict(family="Inter, sans-serif", color="white"),
-                margin=dict(l=10, r=10, t=50, b=10),
-                yaxis=dict(title="Points"),
-            )
-            fig.update_xaxes(color="white")
-            fig.update_yaxes(color="white", gridcolor="rgba(255,255,255,0.08)")
-
-            # Table (white text, transparent background)
-            header = html.Tr([
-                html.Th("Factor"),
-                html.Th("Normalized Value"),
-                html.Th("Weight"),
-                html.Th("Contribution"),
-            ])
-
-            body = []
-            for r in breakdown:
-                body.append(
-                    html.Tr(
-                        [
-                            html.Td(r["factor"]),
-                            html.Td(f"{float(r.get('normalized_value', 0.0)):.2f}"),
-                            html.Td(f"{float(r.get('weight', 0.0)):.2f}"),
-                            html.Td(f"{float(r.get('contribution', 0.0)):.2f}"),
-                        ]
+                # Background lines (reduced set)
+                pcp_fig.add_trace(
+                    go.Parcoords(
+                        line=dict(
+                            color=self._safe_numeric_series(pcp_df[score_col], 0.0).values,
+                            colorscale=GREEN_SCALE,
+                            cmin=float(pcp_df[score_col].min()),
+                            cmax=float(pcp_df[score_col].max()),
+                            showscale=True,
+                        ),
+                        dimensions=dims,
+                        labelfont=dict(color="white", size=12),
+                        tickfont=dict(color="rgba(255,255,255,0.7)", size=10),
                     )
                 )
 
-            body.append(html.Tr([
-                html.Td(html.B("Final Score")),
-                html.Td(""),
-                html.Td(""),
-                html.Td(html.B(f"{final_score:.2f}")),
-            ]))
+                # Selected overlay (strong cyan)
+                df_sel = pcp_df[pcp_df["Country"].astype(str) == str(selected_country)]
+                if not df_sel.empty:
+                    dims_sel = [
+                        dict(label=lab, range=[0, 100], values=self._safe_numeric_series(df_sel[lab], 0.0).values)
+                        for lab in labels
+                    ]
+                    pcp_fig.add_trace(
+                        go.Parcoords(
+                            line=dict(
+                                color=[1.0] * len(df_sel),
+                                colorscale=[[0, "#66fcf1"], [1, "#66fcf1"]],
+                                cmin=0.0,
+                                cmax=1.0,
+                                showscale=False,
+                            ),
+                            dimensions=dims_sel,
+                            labelfont=dict(color="white", size=12),
+                            tickfont=dict(color="rgba(255,255,255,0.8)", size=10),
+                        )
+                    )
 
-            table = html.Table(
-                [html.Thead(header), html.Tbody(body)],
-                style={
-                    "width": "100%",
-                    "color": "white",
-                    "fontSize": "12px",
-                    "borderCollapse": "collapse",
-                    "backgroundColor": "rgba(0,0,0,0)",
-                },
-            )
+                pcp_fig.update_layout(
+                    title=None,  # avoid duplicate title
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="Inter, sans-serif", color="white"),
+                    margin=dict(l=10, r=10, t=10, b=10),
+                )
 
-            title = f"{row['Country']} — Composite Score: {final_score:.2f}"
-            return title, fig, table
+                return title, investor_label, splom_fig, pcp_fig
+
+            except Exception as e:
+                msg = f"Drilldown error: {type(e).__name__}: {e}"
+                persona = persona or "real_estate"
+                investor_label = self.PERSONAS.get(persona, {"name": persona}).get("name", persona)
+                return msg, investor_label, self._empty_message_fig(msg), self._empty_message_fig(msg)
 
     # ---------- Layout ----------
     def setup_layout(self):
@@ -543,3 +653,4 @@ class Main:
 if __name__ == "__main__":
     main = Main()
     main.run()
+
