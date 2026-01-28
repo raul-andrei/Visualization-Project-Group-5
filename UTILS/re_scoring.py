@@ -309,7 +309,7 @@ if __name__ == "__main__":
         if str(project_root) not in sys.path:
             sys.path.insert(0, str(project_root))
 
-        from scoring import load_and_process_data
+        from UTILS.data_processing import load_and_process_data
 
         df = load_and_process_data()
 

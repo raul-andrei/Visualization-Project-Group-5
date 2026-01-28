@@ -48,10 +48,83 @@ class AnalyticsPanel:
                             selected_className="tab--selected",
                             children=[
                                 html.Div(
+                                    style={"padding": "16px 20px 0px", "color": "white"},
+                                    children=[
+                                        html.Div(
+                                            style={
+                                                "display": "flex",
+                                                "alignItems": "center",
+                                                "justifyContent": "space-between",
+                                                "gap": "12px",
+                                                "marginBottom": "10px",
+                                            },
+                                            children=[
+                                                html.Div(
+                                                    style={"display": "flex", "flexDirection": "column", "gap": "6px"},
+                                                    children=[
+                                                        html.Span(
+                                                            "SCATTERPLOT",
+                                                            style={"color": "#9aa4b2", "fontSize": "11px", "letterSpacing": "0.14em"},
+                                                        ),
+                                                        html.Span(
+                                                            "Score vs selected attribute",
+                                                            style={"color": "white", "fontSize": "14px", "fontWeight": 700},
+                                                        ),
+                                                    ],
+                                                ),
+                                                html.Div(
+                                                    style={"minWidth": "260px"},
+                                                    children=[
+                                                        dcc.Dropdown(
+                                                            id="scatter-y-attr",
+                                                            options=[
+                                                                {"label": "GDP per Capita (k USD)", "value": "Real_GDP_per_Capita_USD"},
+                                                                {"label": "Population (M)", "value": "Total_Population"},
+                                                                {"label": "Population Growth (%)", "value": "Population_Growth_Rate"},
+                                                                {"label": "Net Migration Rate (%)", "value": "Net_Migration_Rate"},
+                                                                {"label": "Unemployment (%)", "value": "Unemployment_Rate_percent"},
+                                                                {"label": "Public Debt (% of GDP)", "value": "Public_Debt_percent_of_GDP"},
+                                                            ],
+                                                            value="Real_GDP_per_Capita_USD",
+                                                            clearable=False,
+                                                            searchable=False,
+                                                            className="investor-selector-dropdown",
+                                                        )
+                                                    ],
+                                                ),
+                                            ],
+                                        ),
+                                        dcc.Graph(
+                                            id="score-attr-scatter",
+                                            figure=_dark_placeholder("Adjust filters and press Apply to update the scatter plot."),
+                                            config={"displayModeBar": False},
+                                            style={"height": "360px"},
+                                        ),
+                                    ],
+                                ),
+                                html.Div(
+                                    className="sidebar-divider",
+                                    style={"width": "100%", "max-width": "1400px", "margin-top": "30px", "margin-bottom": "40px"},
+                                    ),
+                                html.Div(
+                                    style={"display": "flex", "flexDirection": "column", "gap": "6px", "padding": "0px 20px 0px", "color": "white"},
+                                    children=[
+                                        html.Span(
+                                            "LEADERBOARD",
+                                            style={"color": "#9aa4b2", "fontSize": "11px", "letterSpacing": "0.14em"},
+                                            ),
+                                        html.Span(
+                                            "Top 5 countries by opportunity score",
+                                            style={"color": "white", "fontSize": "14px", "fontWeight": 700},
+                                            ),
+                                        ],
+                                    ),
+                                html.Div(
                                     id="top-5-chart",
-                                    style={"padding": "20px", "color": "white"},
-                                    children="Placeholder: Top 5 Chart will render here.",
-                                )
+                                    style={"padding": "10px 20px 20px", "color": "white"},
+                                    children=[
+                                    ],
+                                ),
                             ],
                         ),
 

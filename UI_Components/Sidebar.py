@@ -4,10 +4,63 @@ REAL_ESTATE_FILTERS = [
     {"col": "Real_GDP_per_Capita_USD", "label": "GDP per Capita (USD)", "dir": +1},
     {"col": "Total_Population", "label": "Population", "dir": +1},
     {"col": "Population_Growth_Rate", "label": "Population Growth (%)", "dir": +1},
-    {"col": "Net_Migration_Rate", "label": "Net Migration Rate", "dir": +1},
+    {"col": "Net_Migration_Rate", "label": "Net Migration Rate (%)", "dir": +1},
     {"col": "Unemployment_Rate_percent", "label": "Unemployment (%)", "dir": -1},
     {"col": "Public_Debt_percent_of_GDP", "label": "Public Debt (% of GDP)", "dir": -1},
 ]
+
+# Human-friendly slider ranges (Option A)
+# Keep values in raw units (USD, people, %, etc.), but rounded for UI.
+FILTER_SLIDER_SPECS = {
+    "Real_GDP_per_Capita_USD": {
+        # UI in k USD (so 120 means 120,000 USD)
+        "min": 0,
+        "max": 120,
+        "step": 1,
+        "value": [0, 120],
+    },
+    "Total_Population": {
+        # UI in millions (so 1500 means 1.5B people)
+        "min": 0,
+        "max": 1500,
+        "step": 10,
+        "value": [0, 1500],
+    },
+    "Population_Growth_Rate": {
+        "min": 0.0,
+        "max": 7.0,
+        "step": 0.1,
+        "value": [0.0, 7.0],
+    },
+    "Net_Migration_Rate": {
+        "min": -5.0,
+        "max": 50.0,
+        "step": 0.5,
+        "value": [-5.0, 50.0],
+    },
+    "Unemployment_Rate_percent": {
+        "min": 0.0,
+        "max": 40.0,
+        "step": 0.5,
+        "value": [0.0, 40.0],
+    },
+    "Public_Debt_percent_of_GDP": {
+        "min": 0.0,
+        "max": 300.0,
+        "step": 5.0,
+        "value": [0.0, 300.0],
+    },
+}
+
+# UI display helpers (no effect on algorithm)
+FILTER_UI_FORMAT = {
+    "Real_GDP_per_Capita_USD": {"scale": 1.0, "suffix": "k USD"},
+    "Total_Population": {"scale": 1.0, "suffix": "M"},
+    "Population_Growth_Rate": {"scale": 1.0, "suffix": "%"},
+    "Net_Migration_Rate": {"scale": 1.0, "suffix": "%"},
+    "Unemployment_Rate_percent": {"scale": 1.0, "suffix": "%"},
+    "Public_Debt_percent_of_GDP": {"scale": 1.0, "suffix": "%"},
+}
 
 class Sidebar:
     def __init__(self):
@@ -101,7 +154,7 @@ class Sidebar:
                                             children=[
                                                 html.Span(f["label"], className="weight-slider-label"),
                                                 html.Span(
-                                                    "",
+                                                    "—",
                                                     id={"type": "filter-range-value", "col": f["col"]},
                                                     className="weight-slider-value",
                                                 ),
@@ -109,12 +162,16 @@ class Sidebar:
                                         ),
                                         dcc.RangeSlider(
                                             id={"type": "filter-range", "col": f["col"]},
-                                            min=0,
-                                            max=100,
-                                            step=1,
-                                            value=[0, 100],
+                                            min=FILTER_SLIDER_SPECS[f["col"]]["min"],
+                                            max=FILTER_SLIDER_SPECS[f["col"]]["max"],
+                                            step=FILTER_SLIDER_SPECS[f["col"]]["step"],
+                                            value=FILTER_SLIDER_SPECS[f["col"]]["value"],
                                             marks=None,
-                                            tooltip={"placement": "bottom", "always_visible": False},
+                                            tooltip={
+                                                "placement": "bottom",
+                                                "always_visible": False,
+                                                "template": f"{{value}}{FILTER_UI_FORMAT[f['col']]['suffix']}",
+                                            },
                                             className="weight-slider-control",
                                             allowCross=False,
                                         ),
@@ -126,6 +183,12 @@ class Sidebar:
                         html.Button(
                             "Apply",
                             id="apply-weights-btn",
+                            n_clicks=0,
+                            className="weights-apply-btn",
+                        ),
+                        html.Button(
+                            "Reset",
+                            id="reset-filters-btn",
                             n_clicks=0,
                             className="weights-apply-btn",
                         ),

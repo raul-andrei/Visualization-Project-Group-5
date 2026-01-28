@@ -5,10 +5,10 @@ from UI_Components.Sidebar import Sidebar
 from UI_Components.MapView import MapView
 from UI_Components.AnalyticsPanel import AnalyticsPanel
 
-from scoring import load_and_process_data
-from UTILS.weighted_scoring import (
-    compute_weighted_score,
-    PERSONA_FEATURES,
+from UTILS.data_processing import load_and_process_data
+from UTILS.re_scoring import (
+    compute_real_estate_scores,
+    filter_and_score_real_estate_cohort,
 )
 
 from plotly import express as px
@@ -39,6 +39,7 @@ GREEN_SCALE = [
 ]
 
 # Short labels (prevents stacked text in SPLOM/PCP)
+
 SHORT_LABELS = {
     "GDP per Capita (USD)": "GDP/cap",
     "Population": "Pop",
@@ -64,6 +65,16 @@ SHORT_LABELS = {
     "GDP Growth (%)": "GDP Growth",
 }
 
+# Scatter Y options for the score-vs-attribute scatter plot
+SCATTER_Y_OPTIONS = [
+    {"col": "Real_GDP_per_Capita_USD", "label": "GDP per Capita", "unit": "k USD", "scale": 1_000.0},
+    {"col": "Total_Population", "label": "Population", "unit": "M people", "scale": 1_000_000.0},
+    {"col": "Population_Growth_Rate", "label": "Population Growth", "unit": "%", "scale": 1.0},
+    {"col": "Net_Migration_Rate", "label": "Net Migration", "unit": "", "scale": 1.0},
+    {"col": "Unemployment_Rate_percent", "label": "Unemployment", "unit": "%", "scale": 1.0},
+    {"col": "Public_Debt_percent_of_GDP", "label": "Public Debt", "unit": "% of GDP", "scale": 1.0},
+]
+
 
 class Main:
     def __init__(self):
@@ -74,7 +85,7 @@ class Main:
         self.map_view = MapView()
         self.analytics_panel = AnalyticsPanel()
 
-        self.PERSONAS = getattr(self.sidebar, "PERSONAS", {"real_estate": {"name": "REAL ESTATE"}})
+        self.INVESTOR_LABEL = "REAL ESTATE"
         self.app.layout = self.setup_layout()
 
         # Force Plotly to relayout smoothly during sidebar collapse/expand
@@ -135,9 +146,6 @@ class Main:
         )
         return fig
 
-    def _default_weights_for_persona(self, persona: str) -> dict:
-        feats = PERSONA_FEATURES.get(persona, [])
-        return {str(f["col"]): 3 for f in feats}
 
     def _empty_message_fig(self, text: str):
         fig = go.Figure()
@@ -196,6 +204,106 @@ class Main:
             .fillna(default)
         )
 
+    # ---------- Filtering + Mode-B scoring ----------
+    def _filters_from_ranges(self, values_list, ids_list):
+        """Convert pattern-matching RangeSlider values into a {col: (min,max)} dict."""
+        if not values_list or not ids_list:
+            return {}
+
+        out = {}
+        for v, i in zip(values_list, ids_list):
+            col = str(i.get("col"))
+            if isinstance(v, (list, tuple)) and len(v) == 2:
+                out[col] = (v[0], v[1])
+        return out
+
+    def _score_mode_b(self, base_df: pd.DataFrame, filters: dict) -> pd.DataFrame:
+        """Apply Mode-B cohort filtering + re-scoring using `filter_and_score_real_estate_cohort`.
+
+        IMPORTANT:
+        The UI RangeSliders now operate on *human-friendly units*:
+        - GDP per Capita slider is in **k USD** (e.g., 55 -> $55,000)
+        - Population slider is in **M people** (e.g., 20 -> 20,000,000)
+        - Growth/Unemployment/Debt sliders are in **%**
+        - Net Migration slider uses the dataset's raw units
+
+        We convert those slider bounds into the raw numeric bounds expected by the cohort filter.
+        """
+
+        def _get(col):
+            return filters.get(col, (None, None))
+
+        def _as_float_pair(v):
+            if not isinstance(v, (list, tuple)) or len(v) != 2:
+                return None, None
+            try:
+                return float(v[0]), float(v[1])
+            except Exception:
+                return None, None
+
+        def _bounds_raw(col: str, lo, hi):
+            """Convert slider bounds -> raw bounds for a specific column."""
+            lo_f, hi_f = _as_float_pair([lo, hi])
+            if lo_f is None or hi_f is None:
+                return None, None
+
+            # Ensure ordering
+            if lo_f > hi_f:
+                lo_f, hi_f = hi_f, lo_f
+
+            # Unit conversions
+            if col == "Total_Population":
+                lo_f *= 1_000_000.0
+                hi_f *= 1_000_000.0
+            elif col == "Real_GDP_per_Capita_USD":
+                lo_f *= 1_000.0
+                hi_f *= 1_000.0
+            # Percent-based columns: already in % (no conversion)
+            # Migration: keep raw
+
+            return lo_f, hi_f
+
+        # Slider bounds -> raw bounds
+        gdp_lo, gdp_hi = _bounds_raw("Real_GDP_per_Capita_USD", *_get("Real_GDP_per_Capita_USD"))
+        pop_lo, pop_hi = _bounds_raw("Total_Population", *_get("Total_Population"))
+        pg_lo, pg_hi = _bounds_raw("Population_Growth_Rate", *_get("Population_Growth_Rate"))
+        mig_lo, mig_hi = _bounds_raw("Net_Migration_Rate", *_get("Net_Migration_Rate"))
+        un_lo, un_hi = _bounds_raw("Unemployment_Rate_percent", *_get("Unemployment_Rate_percent"))
+        debt_lo, debt_hi = _bounds_raw("Public_Debt_percent_of_GDP", *_get("Public_Debt_percent_of_GDP"))
+
+        return filter_and_score_real_estate_cohort(
+            base_df,
+            gdp_per_capita_min=gdp_lo,
+            gdp_per_capita_max=gdp_hi,
+            population_min=pop_lo,
+            population_max=pop_hi,
+            pop_growth_min=pg_lo,
+            pop_growth_max=pg_hi,
+            net_migration_min=mig_lo,
+            net_migration_max=mig_hi,
+            unemployment_min=un_lo,
+            unemployment_max=un_hi,
+            debt_min=debt_lo,
+            debt_max=debt_hi,
+            max_missing=1,
+            keep_intermediate=True,
+            missing_penalty_enabled=True,
+            missing_penalty_max=15.0,
+        )
+
+    def _normalize_0_100(self, df: pd.DataFrame, col: str, invert: bool = False) -> pd.Series:
+        """Min-max normalize a column to 0..100 within the given df."""
+        s = self._safe_numeric_series(df[col], default=np.nan)
+        mn = float(np.nanmin(s.to_numpy(dtype=float))) if np.isfinite(np.nanmin(s.to_numpy(dtype=float))) else 0.0
+        mx = float(np.nanmax(s.to_numpy(dtype=float))) if np.isfinite(np.nanmax(s.to_numpy(dtype=float))) else 1.0
+        if mx - mn < 1e-12:
+            out = np.zeros(len(df), dtype=float)
+        else:
+            out = (s.to_numpy(dtype=float) - mn) / (mx - mn) * 100.0
+        if invert:
+            out = 100.0 - out
+        return pd.Series(out, index=df.index)
+
     # ---------- Callbacks ----------
     def register_callbacks(self):
 
@@ -245,53 +353,79 @@ class Main:
         @self.app.callback(
             Output({"type": "filter-range-value", "col": ALL}, "children"),
             Input({"type": "filter-range", "col": ALL}, "value"),
+            State({"type": "filter-range", "col": ALL}, "id"),
             prevent_initial_call=False,
         )
-        def render_filter_range_labels(values_list):
-            # If the sidebar sliders are not mounted yet, Dash will pass an empty list.
-            if not values_list:
+        def render_filter_range_labels(values_list, ids_list):
+            if not values_list or not ids_list:
                 return []
 
+            def _fmt(col: str, x):
+                try:
+                    xf = float(x)
+                except Exception:
+                    return str(x)
+
+                if abs(xf - round(xf)) < 1e-9:
+                    xf_str = str(int(round(xf)))
+                else:
+                    xf_str = f"{xf:.2f}"
+
+                if col == "Total_Population":
+                    return f"{xf_str}M"
+                if col == "Real_GDP_per_Capita_USD":
+                    return f"{xf_str}k"
+                if col in {"Population_Growth_Rate", "Unemployment_Rate_percent", "Public_Debt_percent_of_GDP"}:
+                    return f"{xf_str}%"
+                return xf_str
+
             labels = []
-            for v in values_list:
-                # RangeSlider value should be [min, max]
+            for v, i in zip(values_list, ids_list):
+                col = str(i.get("col"))
                 if isinstance(v, (list, tuple)) and len(v) == 2:
                     lo, hi = v
-                    # Prefer compact formatting (ints if possible)
-                    try:
-                        lo_f = float(lo)
-                        hi_f = float(hi)
-                        if lo_f.is_integer() and hi_f.is_integer():
-                            labels.append(f"{int(lo_f)}–{int(hi_f)}")
-                        else:
-                            labels.append(f"{lo_f:.2f}–{hi_f:.2f}")
-                    except Exception:
-                        labels.append(f"{lo}–{hi}")
+                    labels.append(f"{_fmt(col, lo)}–{_fmt(col, hi)}")
                 else:
-                    # Fallback (unexpected shape)
                     labels.append(str(v))
 
             return labels
 
         # -----------------------------
-        # Map updates
+        # Apply filters (snapshot RangeSlider values when Apply is clicked)
+        # -----------------------------
+        @self.app.callback(
+            Output("filters-applied-store", "data"),
+            Input("apply-weights-btn", "n_clicks"),
+            State({"type": "filter-range", "col": ALL}, "value"),
+            State({"type": "filter-range", "col": ALL}, "id"),
+            prevent_initial_call=True,
+        )
+        def apply_filters(n_clicks, values_list, ids_list):
+            if not n_clicks:
+                raise PreventUpdate
+            filters = self._filters_from_ranges(values_list, ids_list)
+            return filters
+
+        # -----------------------------
+        # Map updates (Mode-B)
         # -----------------------------
         @self.app.callback(
             Output("world-map", "figure"),
-            Input("selected-persona-store", "data"),
+            Input("filters-applied-store", "data"),
         )
-        def update_map_on_persona(persona):
-            persona = persona or "real_estate"
-            weights = self._default_weights_for_persona(persona)
+        def update_map(filters_applied):
+            filters_applied = filters_applied or {}
 
             try:
-                result = compute_weighted_score(scoring_df, persona, weights)
+                scored_df = self._score_mode_b(scoring_df, filters_applied)
             except Exception:
-                return self._empty_world_figure()
+                # Fallback to global scoring if cohort scoring fails
+                try:
+                    scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
+                except Exception:
+                    return self._empty_world_figure()
 
-            scored_df = result.scored_df
-            score_col = result.score_col
-
+            score_col = "RE_Opp"
             df_plot = scored_df[["Country", score_col]].dropna()
             if df_plot.empty:
                 return self._empty_world_figure()
@@ -302,8 +436,9 @@ class Main:
                 locationmode="country names",
                 color=score_col,
                 hover_name="Country",
-                title=f"<b>{self.PERSONAS[persona]['name']}</b>",
+                title=None,
                 color_continuous_scale=GREEN_SCALE,
+                range_color=(0, 100),
             )
 
             fig.update_traces(
@@ -328,32 +463,29 @@ class Main:
                     projection_type="natural earth",
                 ),
                 font_color="white",
-                coloraxis=dict(
-                    cmin=float(df_plot[score_col].min()),
-                    cmax=float(df_plot[score_col].max()),
-                ),
             )
+
             return fig
 
         # -----------------------------
-        # Top 5
+        # Top 5 (Mode-B)
         # -----------------------------
         @self.app.callback(
             Output("top-5-chart", "children"),
-            Input("selected-persona-store", "data"),
+            Input("filters-applied-store", "data"),
         )
-        def top5(persona):
-            persona = persona or "real_estate"
-            weights = self._default_weights_for_persona(persona)
+        def top5(filters_applied):
+            filters_applied = filters_applied or {}
 
             try:
-                result = compute_weighted_score(scoring_df, persona, weights)
+                scored_df = self._score_mode_b(scoring_df, filters_applied)
             except Exception:
-                return "No data"
+                try:
+                    scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
+                except Exception:
+                    return "No data"
 
-            scored_df = result.scored_df
-            score_col = result.score_col
-
+            score_col = "RE_Opp"
             df_top = scored_df[["Country", score_col]].dropna().nlargest(5, score_col)
             if df_top.empty:
                 return "No data"
@@ -362,11 +494,100 @@ class Main:
                 df_top,
                 x="Country",
                 y=score_col,
-                title=f"Top 5 — {self.PERSONAS[persona]['name']}",
+                title=None,
                 color_discrete_sequence=["#1f5c52"],
             )
             bar_fig = self._dark_fig_layout(bar_fig)
+            bar_fig.update_yaxes(range=[0, 100])
+            bar_fig.update_yaxes(title="Real Estate Opportunity Score (0–100)")
             return dcc.Graph(figure=bar_fig, config={"displayModeBar": False})
+
+        # -----------------------------
+        # Score vs Attribute Scatter: dropdown options
+        # -----------------------------
+        @self.app.callback(
+            Output("scatter-y-attr", "options"),
+            Input("plotly-resize-signal", "data"),
+            prevent_initial_call=False,
+        )
+        def _init_scatter_dropdown(_):
+            return [{"label": o["label"], "value": o["col"]} for o in SCATTER_Y_OPTIONS]
+
+        # -----------------------------
+        # Score vs Attribute Scatter: main figure
+        # -----------------------------
+        @self.app.callback(
+            Output("score-attr-scatter", "figure"),
+            Input("filters-applied-store", "data"),
+            Input("scatter-y-attr", "value"),
+        )
+        def update_score_attr_scatter(filters_applied, y_col):
+            filters_applied = filters_applied or {}
+            y_col = y_col or "Real_GDP_per_Capita_USD"
+
+            # Lookup label/unit/scale
+            meta = next((o for o in SCATTER_Y_OPTIONS if o["col"] == y_col), None)
+            if meta is None:
+                meta = {"col": y_col, "label": y_col, "unit": "", "scale": 1.0}
+
+            try:
+                scored_df = self._score_mode_b(scoring_df, filters_applied)
+            except Exception:
+                try:
+                    scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
+                except Exception:
+                    return self._empty_message_fig("No data")
+
+            if scored_df is None or len(scored_df) == 0 or y_col not in scored_df.columns:
+                return self._empty_message_fig("No data")
+
+            dfp = scored_df[["Country", "RE_Opp", y_col]].copy()
+            dfp["RE_Opp"] = self._safe_numeric_series(dfp["RE_Opp"], default=np.nan)
+            dfp[y_col] = self._safe_numeric_series(dfp[y_col], default=np.nan)
+            dfp = dfp.dropna(subset=["RE_Opp", y_col])
+            if dfp.empty:
+                return self._empty_message_fig("No data")
+
+            # Scale Y for readability
+            y_scaled = dfp[y_col] / float(meta.get("scale", 1.0) or 1.0)
+            y_title = meta["label"] + (f" ({meta['unit']})" if meta.get("unit") else "")
+
+            fig = px.scatter(
+                dfp.assign(_y=y_scaled),
+                x="RE_Opp",
+                y="_y",
+                hover_name="Country",
+                title=f"Score vs {meta['label']}",
+                color_discrete_sequence=["#38a89a"],
+            )
+
+            fig.update_traces(marker=dict(size=7, opacity=0.65))
+
+            fig.update_layout(
+                title_font=dict(family="Inter, sans-serif", size=16, color="white"),
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="Inter, sans-serif", color="white"),
+                margin=dict(l=10, r=10, t=50, b=10),
+                showlegend=False,
+            )
+
+            fig.update_xaxes(
+                title="Real Estate Opportunity Score (0–100)",
+                range=[0, 100],
+                color="white",
+                gridcolor="rgba(255,255,255,0.08)",
+                zerolinecolor="rgba(255,255,255,0.12)",
+            )
+
+            fig.update_yaxes(
+                title=y_title,
+                color="white",
+                gridcolor="rgba(255,255,255,0.08)",
+                zerolinecolor="rgba(255,255,255,0.12)",
+            )
+
+            return fig
 
         # -----------------------------
         # Country click -> store
@@ -396,12 +617,12 @@ class Main:
             Output("drilldown-splom", "figure"),
             Output("drilldown-pcp", "figure"),
             Input("selected-country-store", "data"),
-            Input("selected-persona-store", "data"),
+            Input("filters-applied-store", "data"),
         )
-        def render_country_drilldown(selected_country, persona):
+        def render_country_drilldown(selected_country, filters_applied):
             try:
-                persona = persona or "real_estate"
-                investor_label = self.PERSONAS.get(persona, {"name": persona}).get("name", persona)
+                investor_label = self.INVESTOR_LABEL
+                filters_applied = filters_applied or {}
 
                 if not selected_country:
                     return (
@@ -411,11 +632,13 @@ class Main:
                         self._empty_message_fig("Click a country to show PCP."),
                     )
 
-                weights = self._default_weights_for_persona(persona)
+                # Score the current cohort (Mode B) so drilldown matches the filtered view
+                try:
+                    scored_df = self._score_mode_b(scoring_df, filters_applied)
+                except Exception:
+                    scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
 
-                result = compute_weighted_score(scoring_df, persona, weights)
-                scored_df = result.scored_df
-                score_col = result.score_col
+                score_col = "RE_Opp"
 
                 hit = scored_df[scored_df["Country"].astype(str) == str(selected_country)]
                 if hit.empty:
@@ -425,33 +648,28 @@ class Main:
                 # Comparison set
                 df_sub = self._subset_nearest(scored_df, str(selected_country), score_col, n=60).copy()
 
-                # Persona feature defs
-                defs = PERSONA_FEATURES.get(persona, [])
-                norm_cols = [f"dyn_norm__{d['col']}" for d in defs]
+                # Use the 6 RE input attributes for multivariate views
+                raw_cols = [
+                    ("Real_GDP_per_Capita_USD", "GDP/cap", False),
+                    ("Total_Population", "Pop", False),
+                    ("Population_Growth_Rate", "Pop Growth", False),
+                    ("Net_Migration_Rate", "Migration", False),
+                    ("Unemployment_Rate_percent", "Unemp", True),
+                    ("Public_Debt_percent_of_GDP", "Debt", True),
+                ]
 
-                # Long labels -> short labels
-                long_labels = [str(d.get("label", d["col"])) for d in defs]
-                labels = [SHORT_LABELS.get(l, l) for l in long_labels]
+                labels = []
+                for col, lab, inv in raw_cols:
+                    if col not in df_sub.columns:
+                        df_sub[col] = np.nan
+                    df_sub[lab] = self._normalize_0_100(df_sub, col, invert=inv)
+                    labels.append(lab)
 
-                # Ensure norm columns exist and build display columns (0..100)
-                for c in norm_cols:
-                    if c not in df_sub.columns:
-                        df_sub[c] = 0.0
+                df_sub[score_col] = self._safe_numeric_series(df_sub.get(score_col, 0.0), default=0.0).clip(0, 100)
 
-                for c, lab in zip(norm_cols, labels):
-                    df_sub[lab] = (
-                        self._safe_numeric_series(df_sub[c], default=0.0)
-                        .clip(0, 1)
-                        * 100.0
-                    )
-
-                # Make sure score_col is numeric for coloring
-                df_sub[score_col] = self._safe_numeric_series(df_sub[score_col], default=0.0)
-
-                # Header title (shown in your H3)
                 title = f"{selected_country} — {investor_label} | Compare: {len(df_sub)}"
 
-                # ---------- SPLOM (clean) ----------
+                # ---------- SPLOM ----------
                 splom_fig = px.scatter_matrix(
                     df_sub,
                     dimensions=labels,
@@ -460,7 +678,6 @@ class Main:
                     color_continuous_scale=GREEN_SCALE,
                 )
 
-                # Cleaner matrix
                 splom_fig.update_traces(
                     diagonal_visible=False,
                     showupperhalf=False,
@@ -468,24 +685,23 @@ class Main:
                     marker=dict(size=5, opacity=0.55),
                 )
 
-                # Highlight selected strongly
                 sel_mask = df_sub["Country"].astype(str).values == str(selected_country)
                 if len(splom_fig.data) > 0:
                     sizes = np.where(sel_mask, 12, 5)
                     splom_fig.data[0].update(marker=dict(size=sizes, opacity=0.65))
 
                 splom_fig.update_layout(
-                    title=None,  # avoid duplicate title inside plot
+                    title=None,
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                     font=dict(family="Inter, sans-serif", color="white", size=11),
                     margin=dict(l=10, r=10, t=10, b=10),
-                    coloraxis_showscale=False,  # keep only PCP colorbar
+                    coloraxis_showscale=False,
                 )
                 splom_fig.update_xaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)")
                 splom_fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)")
 
-                # ---------- PCP (reduce spaghetti) ----------
+                # ---------- PCP ----------
                 df_sub_sorted = df_sub.sort_values(score_col, ascending=False).copy()
                 top = df_sub_sorted.head(20)
                 bottom = df_sub_sorted.tail(10)
@@ -498,8 +714,6 @@ class Main:
                 ]
 
                 pcp_fig = go.Figure()
-
-                # Background lines (reduced set)
                 pcp_fig.add_trace(
                     go.Parcoords(
                         line=dict(
@@ -515,7 +729,6 @@ class Main:
                     )
                 )
 
-                # Selected overlay (strong cyan)
                 df_sel = pcp_df[pcp_df["Country"].astype(str) == str(selected_country)]
                 if not df_sel.empty:
                     dims_sel = [
@@ -538,7 +751,7 @@ class Main:
                     )
 
                 pcp_fig.update_layout(
-                    title=None,  # avoid duplicate title
+                    title=None,
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                     font=dict(family="Inter, sans-serif", color="white"),
@@ -549,8 +762,7 @@ class Main:
 
             except Exception as e:
                 msg = f"Drilldown error: {type(e).__name__}: {e}"
-                persona = persona or "real_estate"
-                investor_label = self.PERSONAS.get(persona, {"name": persona}).get("name", persona)
+                investor_label = self.INVESTOR_LABEL
                 return msg, investor_label, self._empty_message_fig(msg), self._empty_message_fig(msg)
 
     # ---------- Layout ----------
@@ -563,7 +775,7 @@ class Main:
 
                 # Selection state
                 dcc.Store(id="selected-country-store", storage_type="memory"),
-                dcc.Store(id="selected-persona-store", data="real_estate", storage_type="memory"),
+                dcc.Store(id="filters-applied-store", storage_type="memory"),
 
                 self.sidebar.render(),
 
