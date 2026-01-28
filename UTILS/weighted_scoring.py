@@ -1,332 +1,358 @@
-
-
 """UTILS/weighted_scoring.py
 
-Interactive scoring utilities.
+Real Estate scoring algorithm (baseline).
 
-Goal:
-- Define (persona -> 6 attributes) as a single source of truth.
-- Provide robust normalization (percentile clipping) so outliers don't dominate.
-- Compute a dynamic weighted score (0–100) from user weights (1–5).
-
-This module is intentionally stateless: Dash callbacks pass weights in and get
-back a scored dataframe + optional breakdown.
+This module intentionally contains ONLY the Real Estate algorithm.
+No personas, no dynamic weighting, no UI helpers.
 """
 
-from __future__ import annotations
-
-from dataclasses import dataclass
-from typing import Dict, List, Tuple
+from typing import Optional
 
 import numpy as np
 import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+
+
+def _as_numeric(s: pd.Series) -> pd.Series:
+    """Coerce to float, remove inf, keep NaN for proper imputation later."""
+    out = pd.to_numeric(s, errors="coerce").astype(float)
+    return out.replace([np.inf, -np.inf], np.nan)
+
+
+def _fill_with_ref_median(x: pd.Series, ref: pd.Series) -> pd.Series:
+    """Fill NaN using the median of a reference series."""
+    med = float(np.nanmedian(ref.to_numpy(dtype=float)))
+    if np.isnan(med):
+        med = 0.0
+    return x.fillna(med)
 
 
 # -----------------------------
-# Persona feature configuration
+# Real Estate baseline algorithm
 # -----------------------------
-# dir: +1 means higher is better, -1 means lower is better
-# label: UI label (nice name)
-PERSONA_FEATURES: Dict[str, List[Dict[str, object]]] = {
-    "real_estate": [
-        {"col": "Real_GDP_per_Capita_USD", "label": "GDP per Capita (USD)", "dir": +1},
-        {"col": "Total_Population", "label": "Population", "dir": +1},
-        {"col": "Population_Growth_Rate", "label": "Population Growth (%)", "dir": +1},
-        {"col": "Net_Migration_Rate", "label": "Net Migration Rate", "dir": +1},
-        {"col": "Unemployment_Rate_percent", "label": "Unemployment (%)", "dir": -1},
-        {"col": "Public_Debt_percent_of_GDP", "label": "Public Debt (% of GDP)", "dir": -1},
-    ],
-    "agriculture": [
-        {"col": "Ag_Area_km2", "label": "Agricultural Area (km²)", "dir": +1},
-        {"col": "Irrigated_Land", "label": "Irrigated Land (km²)", "dir": +1},
-        {"col": "Total_Population", "label": "Population", "dir": +1},
-        {"col": "Exports_billion_USD", "label": "Exports (B USD)", "dir": +1},
-        {"col": "Imports_billion_USD", "label": "Imports (B USD)", "dir": -1},
-        {"col": "Ag_Area_per_Capita", "label": "Ag Area per Capita", "dir": +1},
-    ],
-    "logistics": [
-        {"col": "roadways_km", "label": "Roadways (km)", "dir": +1},
-        {"col": "railways_km", "label": "Railways (km)", "dir": +1},
-        {"col": "airports_paved_runways_count", "label": "Airports (paved runways)", "dir": +1},
-        {"col": "Exports_billion_USD", "label": "Exports (B USD)", "dir": +1},
-        {"col": "Imports_billion_USD", "label": "Imports (B USD)", "dir": +1},
-        {"col": "Coastline", "label": "Coastline (km)", "dir": +1},
-    ],
-    "telecom": [
-        {"col": "Internet_Pen", "label": "Internet Penetration", "dir": +1},
-        {"col": "Mobile_Pen", "label": "Mobile Penetration", "dir": +1},
-        {"col": "Broadband_Pen", "label": "Broadband Penetration", "dir": +1},
-        {"col": "electricity_generating_capacity_kW", "label": "Electricity Capacity (kW)", "dir": +1},
-        {"col": "internet_users_total", "label": "Internet Users (Scale)", "dir": +1},
-        {"col": "broadband_fixed_subscriptions_total", "label": "Broadband Subs (Scale)", "dir": +1},
-    ],
-    "fintech": [
-        {"col": "Real_GDP_Growth_Rate_percent", "label": "GDP Growth (%)", "dir": +1},
-        {"col": "Real_GDP_per_Capita_USD", "label": "GDP per Capita (USD)", "dir": +1},
-        {"col": "Internet_Pen", "label": "Internet Penetration", "dir": +1},
-        {"col": "Mobile_Pen", "label": "Mobile Penetration", "dir": +1},
-        {"col": "Broadband_Pen", "label": "Broadband Penetration", "dir": +1},
-        {"col": "broadband_fixed_subscriptions_total", "label": "Broadband Subs (Scale)", "dir": +1},
-    ],
-}
 
-# Persona-specific microstate penalty tuning.
-# (max_penalty, gamma)
-PENALTY_PARAMS: Dict[str, Tuple[float, float]] = {
-    "real_estate": (35.0, 1.8),
-    "agriculture": (30.0, 1.7),
-    "logistics": (45.0, 2.2),
-    "telecom": (45.0, 2.2),
-    "fintech": (40.0, 2.0),
-}
-
-def apply_microstate_penalty(
+def compute_real_estate_scores(
     df: pd.DataFrame,
-    score_col: str,
-    pop_col: str = "Total_Population",
-    max_penalty: float = 25.0,
-    gamma: float = 1.6,
-):
-    """
-    Penalize very small countries so they don't dominate rankings.
-    Smooth, log-scaled population penalty.
-    """
-
-    pop = df[pop_col].fillna(1).astype(float)
-
-    # Log-scale population to avoid extreme skew
-    pop_log = np.log10(np.clip(pop, 1, None))
-
-    # Robust normalization (ignores extreme outliers)
-    lo = pop_log.quantile(0.05)
-    hi = pop_log.quantile(0.95)
-    pop_norm = ((pop_log - lo) / (hi - lo)).clip(0, 1)
-
-    # Small population → larger penalty
-    penalty = max_penalty * ((1 - pop_norm) ** gamma)
-
-    return (df[score_col] - penalty).clip(0, 100)
-
-# -----------------------------
-# Robust normalization
-# -----------------------------
-def robust_normalize(
-    s: pd.Series,
-    lower_q: float = 0.05,
-    upper_q: float = 0.95,
-    fill_value: float = 0.0,
-) -> pd.Series:
-    """Normalize a numeric series to [0,1] with percentile clipping.
-
-    Steps:
-    1) Coerce to numeric.
-    2) Compute q_low and q_high.
-    3) Clip to [q_low, q_high].
-    4) Min-max scale the clipped values to [0,1].
-
-    If the series is constant or empty, returns zeros.
-    """
-    x = pd.to_numeric(s, errors="coerce").astype(float)
-    x = x.replace([np.inf, -np.inf], np.nan).fillna(fill_value)
-
-    if len(x) == 0:
-        return pd.Series([], dtype=float)
-
-    q_low = float(x.quantile(lower_q))
-    q_high = float(x.quantile(upper_q))
-
-    if np.isclose(q_low, q_high):
-        return pd.Series(np.zeros(len(x)), index=x.index, dtype=float)
-
-    x_clip = x.clip(lower=q_low, upper=q_high)
-    denom = (q_high - q_low)
-    if np.isclose(denom, 0.0):
-        return pd.Series(np.zeros(len(x)), index=x.index, dtype=float)
-
-    return (x_clip - q_low) / denom
-
-
-def apply_direction(norm: pd.Series, direction: int) -> pd.Series:
-    """If direction is -1, invert a normalized [0,1] series."""
-    return norm if direction >= 0 else (1.0 - norm)
-
-
-# -----------------------------
-# Weighted scoring
-# -----------------------------
-@dataclass(frozen=True)
-class ScoreResult:
-    scored_df: pd.DataFrame
-    score_col: str
-    weights_used: Dict[str, float]
-
-
-def normalize_weights(raw_weights: Dict[str, float]) -> Dict[str, float]:
-    """Convert raw slider weights (e.g., 1–5) into normalized weights summing to 1."""
-    cleaned = {k: float(v) for k, v in raw_weights.items() if v is not None}
-    total = sum(cleaned.values())
-    if total <= 0:
-        # fallback: equal weights
-        n = max(len(cleaned), 1)
-        return {k: 1.0 / n for k in cleaned.keys()}
-    return {k: v / total for k, v in cleaned.items()}
-
-
-def get_persona_feature_defs(persona: str) -> List[Dict[str, object]]:
-    if persona not in PERSONA_FEATURES:
-        raise KeyError(f"Unknown persona '{persona}'. Known: {list(PERSONA_FEATURES.keys())}")
-    return PERSONA_FEATURES[persona]
-
-
-def default_persona_weights(persona: str, default: int = 3) -> Dict[str, int]:
-    """Convenience: returns default slider values (1–5) for all 6 attributes."""
-    defs = get_persona_feature_defs(persona)
-    return {d["col"]: int(default) for d in defs}
-
-
-def compute_weighted_score(
-    df: pd.DataFrame,
-    persona: str,
-    raw_weights: Dict[str, float],
     *,
-    lower_q: float = 0.05,
-    upper_q: float = 0.95,
-    output_prefix: str = "dyn",
-    return_norm_columns: bool = True,
-) -> ScoreResult:
-    """Compute a dynamic weighted score (0–100) for a persona.
+    fit_df: Optional[pd.DataFrame] = None,
+    keep_intermediate: bool = True,
+    missing_penalty_enabled: bool = True,
+    missing_penalty_max: float = 15.0,
+) -> pd.DataFrame:
+    """Compute Real Estate Opportunity scores (0–100).
+
+    Inputs (required columns):
+    - Real_GDP_per_Capita_USD
+    - Total_Population
+    - Population_Growth_Rate
+    - Net_Migration_Rate
+    - Unemployment_Rate_percent
+    - Public_Debt_percent_of_GDP
 
     Parameters
-    - df: preprocessed dataframe (from load_and_process_data)
-    - persona: key in PERSONA_FEATURES
-    - raw_weights: mapping {column_name: slider_value}, typically 1–5
-    - lower_q/upper_q: robust clipping percentiles
-    - output_prefix: prefix for generated columns
-    - return_norm_columns: if True, keeps per-attribute normalized columns
+    - df: dataframe to score
+    - fit_df: optional reference dataframe for MinMax fitting
+              (use full dataset for global baseline)
+    - keep_intermediate: if False, only RE_Opp is kept
+    - missing_penalty_enabled: whether to apply missing data penalty
+    - missing_penalty_max: max penalty to apply for missing data
 
     Returns
-    - ScoreResult(scored_df, score_col, weights_used)
-
-    Notes
-    - Missing columns are treated as zeros (but you should ensure preprocessing created them).
-    - All normalized attribute columns are in [0,1] after direction.
+    - DataFrame with RE_Opp and (optionally) intermediate components
     """
-    defs = get_persona_feature_defs(persona)
 
-    # Ensure we have weights for the six columns
-    # (If some are missing, we default them to 3.)
-    full_raw = {}
-    for d in defs:
-        col = str(d["col"])
-        full_raw[col] = float(raw_weights.get(col, 3))
+    base = df.copy()
+    ref = base if fit_df is None else fit_df
 
-    weights = normalize_weights(full_raw)
+    # --- Numeric cleaning (keep NaN so we can impute sensibly) ---
+    cols = [
+        "Real_GDP_per_Capita_USD",
+        "Total_Population",
+        "Population_Growth_Rate",
+        "Net_Migration_Rate",
+        "Unemployment_Rate_percent",
+        "Public_Debt_percent_of_GDP",
+    ]
 
-    out = df.copy()
+    for c in cols:
+        if c not in base.columns:
+            base[c] = np.nan
+        if c not in ref.columns:
+            ref[c] = np.nan
+        base[c] = _as_numeric(base[c])
+        ref[c] = _as_numeric(ref[c])
 
-    # Compute normalized columns
-    norm_cols: List[str] = []
-    for d in defs:
-        col = str(d["col"])
-        direction = int(d.get("dir", +1))
+    # --- Plausibility guard: GDP per capita ---
+    # Values below 1000 USD are implausible for sovereign economies and usually indicate
+    # parsing errors (e.g. commas, units) or placeholder values.
+    # Treat them as missing so they are median-imputed and penalized via data-quality logic.
+    base.loc[base["Real_GDP_per_Capita_USD"] < 1000, "Real_GDP_per_Capita_USD"] = np.nan
+    ref.loc[ref["Real_GDP_per_Capita_USD"] < 1000, "Real_GDP_per_Capita_USD"] = np.nan
 
-        if col not in out.columns:
-            out[col] = 0.0
+    # Impute NaN using reference medians (more realistic than defaulting to 0)
+    base["Real_GDP_per_Capita_USD"] = _fill_with_ref_median(base["Real_GDP_per_Capita_USD"], ref["Real_GDP_per_Capita_USD"]).clip(lower=1)
+    base["Total_Population"] = _fill_with_ref_median(base["Total_Population"], ref["Total_Population"]).clip(lower=1)
+    base["Population_Growth_Rate"] = _fill_with_ref_median(base["Population_Growth_Rate"], ref["Population_Growth_Rate"])
+    base["Net_Migration_Rate"] = _fill_with_ref_median(base["Net_Migration_Rate"], ref["Net_Migration_Rate"])
+    base["Unemployment_Rate_percent"] = _fill_with_ref_median(base["Unemployment_Rate_percent"], ref["Unemployment_Rate_percent"])
+    base["Public_Debt_percent_of_GDP"] = _fill_with_ref_median(base["Public_Debt_percent_of_GDP"], ref["Public_Debt_percent_of_GDP"])
 
-        norm = robust_normalize(out[col], lower_q=lower_q, upper_q=upper_q)
-        norm = apply_direction(norm, direction)
+    scaler = MinMaxScaler(feature_range=(0, 100))
 
-        norm_col = f"{output_prefix}_norm__{col}"
-        out[norm_col] = norm
-        norm_cols.append(norm_col)
+    # --- Wealth ---
+    base["Wealth_Log"] = np.log10(base["Real_GDP_per_Capita_USD"].clip(lower=1000))
+    wealth_log_ref = np.log10(ref["Real_GDP_per_Capita_USD"].clip(lower=1000))
+    base["Wealth_Score"] = scaler.fit(
+        wealth_log_ref.to_numpy().reshape(-1, 1)
+    ).transform(
+        base["Wealth_Log"].to_numpy().reshape(-1, 1)
+    ).flatten()
 
-    # Weighted sum → 0..1
-    score01 = np.zeros(len(out), dtype=float)
-    for d in defs:
-        col = str(d["col"])
-        w = float(weights[col])
-        score01 += w * out[f"{output_prefix}_norm__{col}"].to_numpy(dtype=float)
+    # --- Demand ---
+    base["Pop_Growth_Abs"] = (
+        base["Total_Population"] * base["Population_Growth_Rate"] / 100.0
+    ).clip(lower=0)
 
-    score_col = f"{output_prefix}_score"
+    pop_growth_abs_ref = (
+        ref["Total_Population"] * ref["Population_Growth_Rate"] / 100.0
+    ).clip(lower=0)
 
-    # Base weighted score (0–100)
-    out[score_col] = np.clip(score01 * 100.0, 0.0, 100.0)
+    base["Abs_Demand_Score"] = scaler.fit(
+        pop_growth_abs_ref.to_numpy().reshape(-1, 1)
+    ).transform(
+        base["Pop_Growth_Abs"].to_numpy().reshape(-1, 1)
+    ).flatten()
 
-    # Keep raw score for debugging / report (optional but useful)
-    out[f"{score_col}_raw"] = out[score_col]
-
-    # Apply persona-specific microstate penalty (population-based correction)
-    max_p, g = PENALTY_PARAMS.get(persona, (35.0, 1.8))
-    out[score_col] = apply_microstate_penalty(
-        out,
-        score_col=score_col,
-        pop_col="Total_Population",
-        max_penalty=max_p,
-        gamma=g,
+    base["Rel_Growth_Score"] = (
+        base["Population_Growth_Rate"].clip(lower=0, upper=3) / 3.0 * 100.0
     )
 
-    if not return_norm_columns:
-        out.drop(columns=norm_cols, inplace=True, errors="ignore")
+    migration_ref = ref["Net_Migration_Rate"]
+    base["Migration_Score"] = scaler.fit(
+        migration_ref.to_numpy().reshape(-1, 1)
+    ).transform(
+        base["Net_Migration_Rate"].to_numpy().reshape(-1, 1)
+    ).flatten()
 
-    return ScoreResult(scored_df=out, score_col=score_col, weights_used=weights)
+    base["Demand_Score"] = (
+        0.5 * base["Abs_Demand_Score"]
+        + 0.3 * base["Migration_Score"]
+        + 0.2 * base["Rel_Growth_Score"]
+    )
+
+    # --- Stability ---
+    risk_factor = (
+        0.5 * (base["Unemployment_Rate_percent"].clip(0, 25) / 25.0)
+        + 0.5 * (base["Public_Debt_percent_of_GDP"].clip(0, 150) / 150.0)
+    )
+    base["Stability_Score"] = 100.0 * (1.0 - risk_factor)
+
+    # --- Market size ---
+    base["RE_Market_Raw"] = np.log10(
+        (base["Total_Population"] * base["Real_GDP_per_Capita_USD"]).clip(lower=1)
+    )
+
+    market_raw_ref = np.log10(
+        (ref["Total_Population"] * ref["Real_GDP_per_Capita_USD"]).clip(lower=1)
+    )
+
+    base["RE_Market_Score"] = scaler.fit(
+        market_raw_ref.to_numpy().reshape(-1, 1)
+    ).transform(
+        base["RE_Market_Raw"].to_numpy().reshape(-1, 1)
+    ).flatten()
+
+    # --- Microstate penalty ---
+    base["RE_Micro_Penalty"] = np.where(
+        base["Total_Population"] < 1_000_000,
+        -15,
+        np.where(base["Total_Population"] < 5_000_000, -7, 0),
+    )
+
+    # --- Data quality penalty ---
+    # Countries with many missing inputs (often replaced by 0 upstream) can look artificially strong/weak.
+    # Penalize missingness in the ORIGINAL df columns for transparency.
+    if missing_penalty_enabled:
+        orig = df.reindex(columns=cols)
+        missing_cnt = orig.isna().sum(axis=1).astype(float)
+        base["RE_Missing_Count"] = missing_cnt
+        base["RE_DataQuality_Penalty"] = -(missing_penalty_max * (missing_cnt / float(len(cols)))).clip(0, missing_penalty_max)
+    else:
+        base["RE_Missing_Count"] = 0.0
+        base["RE_DataQuality_Penalty"] = 0.0
+
+    # --- Final score ---
+    re_base = (
+        0.30 * base["Wealth_Score"]
+        + 0.25 * base["Stability_Score"]
+        + 0.25 * base["RE_Market_Score"]
+        + 0.20 * base["Demand_Score"]
+    )
+
+    base["RE_Opp"] = np.clip(re_base + base["RE_Micro_Penalty"] + base["RE_DataQuality_Penalty"], 0.0, 100.0)
+
+    if not keep_intermediate:
+        keep = [
+            "Country",
+            "RE_Opp",
+            "RE_Missing_Count",
+            "RE_DataQuality_Penalty",
+        ]
+        keep = [c for c in keep if c in base.columns]
+        base = base[keep]
 
 
-def build_score_breakdown_for_country(
-    scored_df: pd.DataFrame,
-    persona: str,
-    weights_used: Dict[str, float],
-    country_name: str,
+    return base
+
+
+def filter_and_score_real_estate_cohort(
+    df: pd.DataFrame,
     *,
-    output_prefix: str = "dyn",
-) -> Tuple[List[Dict[str, object]], float]:
-    """Create a simple additive breakdown for one country.
+    # Optional min/max bounds for each of the 6 inputs
+    gdp_per_capita_min: Optional[float] = None,
+    gdp_per_capita_max: Optional[float] = None,
+    population_min: Optional[float] = None,
+    population_max: Optional[float] = None,
+    pop_growth_min: Optional[float] = None,
+    pop_growth_max: Optional[float] = None,
+    net_migration_min: Optional[float] = None,
+    net_migration_max: Optional[float] = None,
+    unemployment_min: Optional[float] = None,
+    unemployment_max: Optional[float] = None,
+    debt_min: Optional[float] = None,
+    debt_max: Optional[float] = None,
+    # Data-quality filter
+    max_missing: int = 1,
+    # Scoring controls
+    keep_intermediate: bool = False,
+    missing_penalty_enabled: bool = True,
+    missing_penalty_max: float = 15.0,
+) -> pd.DataFrame:
+    """Filter a cohort by any of the 6 RE inputs and recompute RE scores within that cohort (Mode B).
 
-    Returns a list of rows:
-      {factor, weight, normalized_value, contribution_points}
-    and the final score.
+    Behavior:
+    1) Applies optional [min,max] bounds on each of the 6 raw input columns.
+    2) Applies a missingness filter based on the ORIGINAL (unimputed) values of those 6 columns.
+    3) Recomputes RE_Opp where all MinMaxScaler fits are performed on the cohort itself (fit_df=cohort).
 
-    This is handy for waterfall charts.
+    Returns the scored cohort dataframe. If the cohort is too small (<2 rows), returns an empty/NaN-scored frame.
     """
-    defs = get_persona_feature_defs(persona)
 
-    hit = scored_df[scored_df["Country"].astype(str) == str(country_name)]
-    if hit.empty:
-        return [], 0.0
+    cols = [
+        "Real_GDP_per_Capita_USD",
+        "Total_Population",
+        "Population_Growth_Rate",
+        "Net_Migration_Rate",
+        "Unemployment_Rate_percent",
+        "Public_Debt_percent_of_GDP",
+    ]
 
-    row = hit.iloc[0]
-    breakdown: List[Dict[str, object]] = []
+    # Start from a copy to avoid side effects
+    cohort = df.copy()
 
-    total = 0.0
-    for d in defs:
-        col = str(d["col"])
-        label = str(d.get("label", col))
-        w = float(weights_used.get(col, 0.0))
-        norm_val = float(row.get(f"{output_prefix}_norm__{col}", 0.0))
-        contrib = 100.0 * w * norm_val
-        total += contrib
-        breakdown.append(
-            {
-                "factor": label,
-                "col": col,
-                "weight": w,
-                "normalized_value": norm_val,
-                "contribution": contrib,
-            }
+    # Ensure numeric for filtering (keep NaN)
+    for c in cols:
+        if c not in cohort.columns:
+            cohort[c] = np.nan
+        cohort[c] = _as_numeric(cohort[c])
+
+    # Build bounds mask
+    mask = pd.Series(True, index=cohort.index)
+
+    def _apply_bounds(col: str, lo: Optional[float], hi: Optional[float]) -> None:
+        nonlocal mask
+        if lo is not None:
+            mask &= cohort[col] >= lo
+        if hi is not None:
+            mask &= cohort[col] <= hi
+
+    _apply_bounds("Real_GDP_per_Capita_USD", gdp_per_capita_min, gdp_per_capita_max)
+    _apply_bounds("Total_Population", population_min, population_max)
+    _apply_bounds("Population_Growth_Rate", pop_growth_min, pop_growth_max)
+    _apply_bounds("Net_Migration_Rate", net_migration_min, net_migration_max)
+    _apply_bounds("Unemployment_Rate_percent", unemployment_min, unemployment_max)
+    _apply_bounds("Public_Debt_percent_of_GDP", debt_min, debt_max)
+
+    cohort = cohort.loc[mask].copy()
+
+    # Missingness filter (based on original/unimputed values)
+    missing_cnt = cohort.reindex(columns=cols).isna().sum(axis=1)
+    cohort = cohort.loc[missing_cnt <= max_missing].copy()
+
+    # If cohort too small, avoid meaningless MinMax scaling
+    if len(cohort) < 2:
+        # Return the cohort (possibly empty) with a placeholder RE_Opp
+        if "RE_Opp" not in cohort.columns:
+            cohort["RE_Opp"] = np.nan
+        return cohort
+
+    # Recompute scores within cohort (Mode B)
+    scored = compute_real_estate_scores(
+        cohort,
+        fit_df=cohort,
+        keep_intermediate=keep_intermediate,
+        missing_penalty_enabled=missing_penalty_enabled,
+        missing_penalty_max=missing_penalty_max,
+    )
+
+    return scored
+
+
+# --- Minimal Sanity Check Block ---
+if __name__ == "__main__":
+    try:
+        # Ensure project root is on sys.path so `import scoring` works when running this file directly
+        import sys
+        from pathlib import Path
+
+        project_root = Path(__file__).resolve().parents[1]
+        if str(project_root) not in sys.path:
+            sys.path.insert(0, str(project_root))
+
+        from scoring import load_and_process_data
+
+        df = load_and_process_data()
+
+        df_re = compute_real_estate_scores(
+            df,
+            fit_df=df,            # global baseline
+            keep_intermediate=False
         )
-    # If we have a penalized score, add the penalty as a final row so the waterfall matches
-    penalized = float(row.get(f"{output_prefix}_score", total))
-    raw = float(row.get(f"{output_prefix}_score_raw", total))
 
-    if raw != penalized:
-        breakdown.append(
-            {
-                "factor": "Microstate Penalty",
-                "col": "Total_Population",
-                "weight": 0.0,
-                "normalized_value": 0.0,
-                "contribution": penalized - raw,  # negative number
-            }
+        # --- Option C: Pre-ranking filter (population + data quality) ---
+        ranking_df = df_re[
+            (df["Total_Population"] >= 500_000) &
+            (df_re["RE_Missing_Count"] <= 1)
+        ]
+
+        print("\n--- SANITY CHECK (OPTION C): RE_Opp LEADERS / TAIL (0–100) ---")
+        print(ranking_df.sort_values("RE_Opp", ascending=False)[["Country", "RE_Opp"]].head(10))
+        print(ranking_df.sort_values("RE_Opp", ascending=True)[["Country", "RE_Opp"]].head(10))
+
+        # --- Option B: Filter + recompute cohort scores ---
+        cohort_scored = filter_and_score_real_estate_cohort(
+            df,
+            # Example cohort: user-defined bounds across the 6 inputs
+            gdp_per_capita_min= None,
+            gdp_per_capita_max=None,
+            population_min=18_000_000,
+            population_max=18_500_000,
+            pop_growth_min= None,
+            pop_growth_max=None,
+            net_migration_min= None,
+            net_migration_max= None,
+            unemployment_min= None,
+            unemployment_max= None,
+            debt_min= None,
+            debt_max= None,
+            max_missing=1,
+            keep_intermediate=False,
         )
-    total = penalized
 
-    return breakdown, float(np.clip(total, 0.0, 100.0))
+        print("\n--- SANITY CHECK (OPTION B): FILTERED + RECOMPUTED COHORT LEADERS / TAIL ---")
+        print(cohort_scored.sort_values("RE_Opp", ascending=False)[["Country", "RE_Opp"]].head(10))
+        print(cohort_scored.sort_values("RE_Opp", ascending=True)[["Country", "RE_Opp"]].head(10))
+
+    except Exception as e:
+        print("Sanity check failed:")
+        print(e)
