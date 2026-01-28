@@ -1,26 +1,17 @@
 from dash import dcc, html
 
+REAL_ESTATE_FILTERS = [
+    {"col": "Real_GDP_per_Capita_USD", "label": "GDP per Capita (USD)", "dir": +1},
+    {"col": "Total_Population", "label": "Population", "dir": +1},
+    {"col": "Population_Growth_Rate", "label": "Population Growth (%)", "dir": +1},
+    {"col": "Net_Migration_Rate", "label": "Net Migration Rate", "dir": +1},
+    {"col": "Unemployment_Rate_percent", "label": "Unemployment (%)", "dir": -1},
+    {"col": "Public_Debt_percent_of_GDP", "label": "Public Debt (% of GDP)", "dir": -1},
+]
 
 class Sidebar:
     def __init__(self):
-        # Single source of truth for persona display names / descriptions / accent colors
-        self.PERSONAS = {
-            "real_estate": {
-                "name": "REAL ESTATE",
-            },
-            "agriculture": {
-                "name": "AGRICULTURE",
-            },
-            "logistics": {
-                "name": "TRANSPORT & LOGISTICS",
-            },
-            "telecom": {
-                "name": "TELECOM",
-            },
-            "fintech": {
-                "name": "FINANCIAL SERVICES",
-            },
-        }
+        pass
 
     def render(self):
         """Returns the full sidebar layout (icon rail + expandable panel)."""
@@ -76,26 +67,7 @@ class Sidebar:
             id="sidebar-panel-investors",
             className="sidebar-panel sidebar-panel--active",  # default active panel
             children=[
-                html.Div(
-                    className="investor-selector",
-                    children=[
-                        html.Div("Investor Type", className="investor-selector-label"),
-                        dcc.Dropdown(
-                            id="persona-dropdown",
-                            options=[
-                                {"label": v["name"], "value": k}
-                                for k, v in self.PERSONAS.items()
-                            ],
-                            value="real_estate",
-                            clearable=False,
-                            searchable=False,
-                            className="investor-selector-dropdown",
-                        ),
-                    ],
-                ),
-
-                html.Div(className="sidebar-divider"),
-
+                
                 # Sliders will be rendered dynamically depending on the selected persona
                 html.Div(
                     id="weights-controls",
@@ -105,15 +77,14 @@ class Sidebar:
                             className="weights-hint-row",
                             children=[
                                 html.Div(
-                                    "Adjust attribute importance (1–5), then press Apply.",
+                                    "Filter countries by setting min/max ranges for each attribute, then press Apply.",
                                     className="weights-hint",
                                 ),
                                 html.Span(
                                     "i",
                                     className="weights-info-icon",
                                     **{"data-tooltip": (
-                                        "Country scores are calculated using only the selected attributes, weighted according to your preferences."
-                                        " Adjusting weights directly affects rankings and map colors."
+                                        "Use these sliders to filter the dataset. Countries outside any selected range are hidden. Press Apply to update the map and charts."
                                     )},
                                 ),
                             ],
@@ -121,7 +92,36 @@ class Sidebar:
                         html.Div(
                             id="weights-sliders-container",
                             className="weights-sliders-container",
-                            children=[],
+                            children=[
+                                html.Div(
+                                    className="weight-slider",
+                                    children=[
+                                        html.Div(
+                                            className="weight-slider-header",
+                                            children=[
+                                                html.Span(f["label"], className="weight-slider-label"),
+                                                html.Span(
+                                                    "",
+                                                    id={"type": "filter-range-value", "col": f["col"]},
+                                                    className="weight-slider-value",
+                                                ),
+                                            ],
+                                        ),
+                                        dcc.RangeSlider(
+                                            id={"type": "filter-range", "col": f["col"]},
+                                            min=0,
+                                            max=100,
+                                            step=1,
+                                            value=[0, 100],
+                                            marks=None,
+                                            tooltip={"placement": "bottom", "always_visible": False},
+                                            className="weight-slider-control",
+                                            allowCross=False,
+                                        ),
+                                    ],
+                                )
+                                for f in REAL_ESTATE_FILTERS
+                            ],
                         ),
                         html.Button(
                             "Apply",

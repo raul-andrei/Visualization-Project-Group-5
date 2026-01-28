@@ -74,8 +74,7 @@ class Main:
         self.map_view = MapView()
         self.analytics_panel = AnalyticsPanel()
 
-        self.PERSONAS = self.sidebar.PERSONAS
-
+        self.PERSONAS = getattr(self.sidebar, "PERSONAS", {"real_estate": {"name": "REAL ESTATE"}})
         self.app.layout = self.setup_layout()
 
         # Force Plotly to relayout smoothly during sidebar collapse/expand
@@ -239,101 +238,40 @@ class Main:
             return sidebar_class, content_class
 
         # -----------------------------
-        # Persona selection
+        # Filter range display (min/max shown next to each slider)
+        # Expects RangeSliders with id={"type": "filter-slider", "col": <col>}
+        # and a label span with id={"type": "filter-value", "col": <col>}
         # -----------------------------
         @self.app.callback(
-            Output("selected-persona-store", "data"),
-            Input("persona-dropdown", "value"),
-            State("selected-persona-store", "data"),
+            Output({"type": "filter-range-value", "col": ALL}, "children"),
+            Input({"type": "filter-range", "col": ALL}, "value"),
+            prevent_initial_call=False,
         )
-        def set_persona_from_dropdown(value, current_persona):
-            if value:
-                return value
-            return current_persona or "real_estate"
+        def render_filter_range_labels(values_list):
+            # If the sidebar sliders are not mounted yet, Dash will pass an empty list.
+            if not values_list:
+                return []
 
-        # -----------------------------
-        # Persona sliders (draft + apply)
-        # -----------------------------
-        @self.app.callback(
-            Output("weights-sliders-container", "children"),
-            Output("weights-draft-store", "data", allow_duplicate=True),
-            Output("weights-applied-store", "data", allow_duplicate=True),
-            Input("selected-persona-store", "data"),
-            prevent_initial_call="initial_duplicate",
-        )
-        def render_persona_sliders(persona):
-            persona = persona or "real_estate"
-            feats = PERSONA_FEATURES.get(persona, [])
-            defaults = {str(f["col"]): 3 for f in feats}
+            labels = []
+            for v in values_list:
+                # RangeSlider value should be [min, max]
+                if isinstance(v, (list, tuple)) and len(v) == 2:
+                    lo, hi = v
+                    # Prefer compact formatting (ints if possible)
+                    try:
+                        lo_f = float(lo)
+                        hi_f = float(hi)
+                        if lo_f.is_integer() and hi_f.is_integer():
+                            labels.append(f"{int(lo_f)}–{int(hi_f)}")
+                        else:
+                            labels.append(f"{lo_f:.2f}–{hi_f:.2f}")
+                    except Exception:
+                        labels.append(f"{lo}–{hi}")
+                else:
+                    # Fallback (unexpected shape)
+                    labels.append(str(v))
 
-            slider_nodes = []
-            for f in feats:
-                col = str(f["col"])
-                label = str(f.get("label", col))
-
-                slider_nodes.append(
-                    html.Div(
-                        className="weight-slider",
-                        children=[
-                            html.Div(
-                                className="weight-slider-header",
-                                children=[
-                                    html.Span(label, className="weight-slider-label"),
-                                    html.Span(
-                                        id={"type": "weight-value", "col": col},
-                                        className="weight-slider-value",
-                                    ),
-                                ],
-                            ),
-                            dcc.Slider(
-                                id={"type": "weight-slider", "col": col},
-                                min=1,
-                                max=5,
-                                step=1,
-                                value=3,
-                                marks={1: "1", 2: "2", 3: "3", 4: "4", 5: "5"},
-                                tooltip={"placement": "bottom", "always_visible": False},
-                                className="weight-slider-control",
-                            ),
-                        ],
-                    )
-                )
-
-            return slider_nodes, defaults, defaults
-
-        @self.app.callback(
-            Output("weights-draft-store", "data"),
-            Output({"type": "weight-value", "col": ALL}, "children"),
-            Input({"type": "weight-slider", "col": ALL}, "value"),
-            State({"type": "weight-slider", "col": ALL}, "id"),
-            State("weights-draft-store", "data"),
-            prevent_initial_call=True,
-        )
-        def update_draft_weights(values, ids, current):
-            current = current or {}
-            if not values or not ids:
-                raise PreventUpdate
-
-            new_weights = dict(current)
-            display_vals = []
-
-            for v, i in zip(values, ids):
-                col = str(i.get("col"))
-                new_weights[col] = int(v) if v is not None else 3
-                display_vals.append(str(new_weights[col]))
-
-            return new_weights, display_vals
-
-        @self.app.callback(
-            Output("weights-applied-store", "data", allow_duplicate=True),
-            Input("apply-weights-btn", "n_clicks"),
-            State("weights-draft-store", "data"),
-            prevent_initial_call=True,
-        )
-        def apply_weights(n_clicks, draft):
-            if not n_clicks:
-                raise PreventUpdate
-            return draft or {}
+            return labels
 
         # -----------------------------
         # Map updates
@@ -341,11 +279,10 @@ class Main:
         @self.app.callback(
             Output("world-map", "figure"),
             Input("selected-persona-store", "data"),
-            Input("weights-applied-store", "data"),
         )
-        def update_map_on_persona(persona, applied_weights):
+        def update_map_on_persona(persona):
             persona = persona or "real_estate"
-            weights = applied_weights or self._default_weights_for_persona(persona)
+            weights = self._default_weights_for_persona(persona)
 
             try:
                 result = compute_weighted_score(scoring_df, persona, weights)
@@ -404,11 +341,10 @@ class Main:
         @self.app.callback(
             Output("top-5-chart", "children"),
             Input("selected-persona-store", "data"),
-            Input("weights-applied-store", "data"),
         )
-        def top5(persona, applied_weights):
+        def top5(persona):
             persona = persona or "real_estate"
-            weights = applied_weights or self._default_weights_for_persona(persona)
+            weights = self._default_weights_for_persona(persona)
 
             try:
                 result = compute_weighted_score(scoring_df, persona, weights)
@@ -427,6 +363,7 @@ class Main:
                 x="Country",
                 y=score_col,
                 title=f"Top 5 — {self.PERSONAS[persona]['name']}",
+                color_discrete_sequence=["#1f5c52"],
             )
             bar_fig = self._dark_fig_layout(bar_fig)
             return dcc.Graph(figure=bar_fig, config={"displayModeBar": False})
@@ -460,9 +397,8 @@ class Main:
             Output("drilldown-pcp", "figure"),
             Input("selected-country-store", "data"),
             Input("selected-persona-store", "data"),
-            Input("weights-applied-store", "data"),
         )
-        def render_country_drilldown(selected_country, persona, applied_weights):
+        def render_country_drilldown(selected_country, persona):
             try:
                 persona = persona or "real_estate"
                 investor_label = self.PERSONAS.get(persona, {"name": persona}).get("name", persona)
@@ -475,7 +411,7 @@ class Main:
                         self._empty_message_fig("Click a country to show PCP."),
                     )
 
-                weights = applied_weights or self._default_weights_for_persona(persona)
+                weights = self._default_weights_for_persona(persona)
 
                 result = compute_weighted_score(scoring_df, persona, weights)
                 scored_df = result.scored_df
@@ -628,10 +564,6 @@ class Main:
                 # Selection state
                 dcc.Store(id="selected-country-store", storage_type="memory"),
                 dcc.Store(id="selected-persona-store", data="real_estate", storage_type="memory"),
-
-                # Slider weight state (draft updates immediately, applied updates only on Apply click)
-                dcc.Store(id="weights-draft-store", storage_type="memory"),
-                dcc.Store(id="weights-applied-store", storage_type="memory"),
 
                 self.sidebar.render(),
 
