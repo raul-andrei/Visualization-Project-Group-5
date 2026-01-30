@@ -81,7 +81,7 @@ class AnalyticsPanel:
                                                                 {"label": "GDP per Capita (k USD)", "value": "Real_GDP_per_Capita_USD"},
                                                                 {"label": "Population (M)", "value": "Total_Population"},
                                                                 {"label": "Population Growth (%)", "value": "Population_Growth_Rate"},
-                                                                {"label": "Net Migration Rate (%)", "value": "Net_Migration_Rate"},
+                                                                {"label": "Net Migration Rate", "value": "Net_Migration_Rate"},
                                                                 {"label": "Unemployment (%)", "value": "Unemployment_Rate_percent"},
                                                                 {"label": "Public Debt (% of GDP)", "value": "Public_Debt_percent_of_GDP"},
                                                             ],
@@ -105,25 +105,24 @@ class AnalyticsPanel:
                                 html.Div(
                                     className="sidebar-divider",
                                     style={"width": "100%", "max-width": "1400px", "margin-top": "30px", "margin-bottom": "40px"},
-                                    ),
+                                ),
                                 html.Div(
                                     style={"display": "flex", "flexDirection": "column", "gap": "6px", "padding": "0px 20px 0px", "color": "white"},
                                     children=[
                                         html.Span(
                                             "LEADERBOARD",
                                             style={"color": "#9aa4b2", "fontSize": "11px", "letterSpacing": "0.14em"},
-                                            ),
+                                        ),
                                         html.Span(
                                             "Top 5 countries by opportunity score",
                                             style={"color": "white", "fontSize": "14px", "fontWeight": 700},
-                                            ),
-                                        ],
-                                    ),
+                                        ),
+                                    ],
+                                ),
                                 html.Div(
                                     id="top-5-chart",
                                     style={"padding": "10px 20px 20px", "color": "white"},
-                                    children=[
-                                    ],
+                                    children=[],
                                 ),
                             ],
                         ),
@@ -139,35 +138,47 @@ class AnalyticsPanel:
                                     style={"padding": "20px", "color": "white"},
                                     children=[
                                         html.Div(
-                                            style={
-                                                "display": "flex",
-                                                "gap": "10px",
-                                                "alignItems": "center",
-                                            },
+                                            style={"display": "flex", "gap": "10px", "alignItems": "center"},
                                             children=[
-                                                html.Span(
-                                                    "INVESTOR TYPE:",
-                                                    style={"color": "#aaa", "fontSize": "12px"},
-                                                ),
+                                                html.Span("INVESTOR TYPE:", style={"color": "#aaa", "fontSize": "12px"}),
                                                 html.Span(
                                                     id="drilldown-investor-label",
                                                     style={"color": "white", "fontWeight": "bold"},
                                                 ),
                                             ],
                                         ),
-                                        html.H3(
-                                            id="drilldown-country-title",
-                                            style={"marginTop": "14px"},
-                                        ),
+                                        html.H3(id="drilldown-country-title", style={"marginTop": "14px"}),
 
                                         dcc.Loading(
                                             type="default",
                                             children=[
+                                                # NEW: Radar
                                                 dcc.Graph(
-                                                    id="drilldown-splom",
-                                                    figure=_dark_placeholder("Click a country on the map to show SPLOM."),
+                                                    id="drilldown-radar",
+                                                    figure=_dark_placeholder("Click a country on the map to show radar + values."),
                                                     config={"displayModeBar": False},
+                                                    style={"height": "360px"},
                                                 ),
+
+                                                # NEW: exact values panel
+                                                html.Div(
+                                                    id="drilldown-values",
+                                                    style={
+                                                        "marginTop": "10px",
+                                                        "padding": "12px 14px",
+                                                        "border": "1px solid rgba(255,255,255,0.10)",
+                                                        "borderRadius": "10px",
+                                                        "background": "rgba(0,0,0,0.15)",
+                                                    },
+                                                    children=[
+                                                        html.Div(
+                                                            style={"color": "#9aa4b2", "fontSize": "12px"},
+                                                            children="Exact values will appear after selecting a country.",
+                                                        )
+                                                    ],
+                                                ),
+
+                                                # Keep PCP (optional but useful)
                                                 dcc.Graph(
                                                     id="drilldown-pcp",
                                                     figure=_dark_placeholder("Click a country on the map to show PCP."),

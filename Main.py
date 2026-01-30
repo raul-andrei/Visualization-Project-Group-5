@@ -38,34 +38,20 @@ GREEN_SCALE = [
     [1.00, "#8ffdf4"],
 ]
 
-# Short labels (prevents stacked text in SPLOM/PCP)
+# PCP base lines dimming: Parcoords DOES NOT support opacity,
+# so we dim by using RGBA colors in the colorscale.
+DIM_GREEN_SCALE = [
+    [0.00, "rgba(11,19,17,0.18)"],
+    [0.10, "rgba(16,35,31,0.18)"],
+    [0.20, "rgba(22,58,51,0.18)"],
+    [0.35, "rgba(31,92,82,0.18)"],
+    [0.50, "rgba(42,127,114,0.18)"],
+    [0.65, "rgba(56,168,154,0.18)"],
+    [0.80, "rgba(79,209,197,0.18)"],
+    [0.90, "rgba(102,252,241,0.18)"],
+    [1.00, "rgba(143,253,244,0.18)"],
+]
 
-SHORT_LABELS = {
-    "GDP per Capita (USD)": "GDP/cap",
-    "Population": "Pop",
-    "Population Growth (%)": "Pop Growth",
-    "Net Migration Rate": "Migration",
-    "Unemployment (%)": "Unemp",
-    "Public Debt (% of GDP)": "Debt",
-    "Agricultural Area (km²)": "Ag Area",
-    "Irrigated Land (km²)": "Irrigation",
-    "Exports (B USD)": "Exports",
-    "Imports (B USD)": "Imports",
-    "Ag Area per Capita": "Ag/cap",
-    "Roadways (km)": "Roads",
-    "Railways (km)": "Rails",
-    "Airports (paved runways)": "Airports",
-    "Coastline (km)": "Coast",
-    "Internet Penetration": "Internet",
-    "Mobile Penetration": "Mobile",
-    "Broadband Penetration": "Broadband",
-    "Electricity Capacity (kW)": "Electricity",
-    "Internet Users (Scale)": "Users",
-    "Broadband Subs (Scale)": "Broad Subs",
-    "GDP Growth (%)": "GDP Growth",
-}
-
-# Scatter Y options for the score-vs-attribute scatter plot
 SCATTER_Y_OPTIONS = [
     {"col": "Real_GDP_per_Capita_USD", "label": "GDP per Capita", "unit": "k USD", "scale": 1_000.0},
     {"col": "Total_Population", "label": "Population", "unit": "M people", "scale": 1_000_000.0},
@@ -146,7 +132,6 @@ class Main:
         )
         return fig
 
-
     def _empty_message_fig(self, text: str):
         fig = go.Figure()
         fig.update_layout(
@@ -170,13 +155,7 @@ class Main:
         )
         return fig
 
-    def _subset_nearest(
-        self,
-        scored_df: pd.DataFrame,
-        selected_country: str,
-        score_col: str,
-        n: int = 60,
-    ) -> pd.DataFrame:
+    def _subset_nearest(self, scored_df: pd.DataFrame, selected_country: str, score_col: str, n: int = 60) -> pd.DataFrame:
         selected_country = str(selected_country)
 
         if "PCA_1" in scored_df.columns and "PCA_2" in scored_df.columns:
@@ -206,10 +185,8 @@ class Main:
 
     # ---------- Filtering + Mode-B scoring ----------
     def _filters_from_ranges(self, values_list, ids_list):
-        """Convert pattern-matching RangeSlider values into a {col: (min,max)} dict."""
         if not values_list or not ids_list:
             return {}
-
         out = {}
         for v, i in zip(values_list, ids_list):
             col = str(i.get("col"))
@@ -218,18 +195,6 @@ class Main:
         return out
 
     def _score_mode_b(self, base_df: pd.DataFrame, filters: dict) -> pd.DataFrame:
-        """Apply Mode-B cohort filtering + re-scoring using `filter_and_score_real_estate_cohort`.
-
-        IMPORTANT:
-        The UI RangeSliders now operate on *human-friendly units*:
-        - GDP per Capita slider is in **k USD** (e.g., 55 -> $55,000)
-        - Population slider is in **M people** (e.g., 20 -> 20,000,000)
-        - Growth/Unemployment/Debt sliders are in **%**
-        - Net Migration slider uses the dataset's raw units
-
-        We convert those slider bounds into the raw numeric bounds expected by the cohort filter.
-        """
-
         def _get(col):
             return filters.get(col, (None, None))
 
@@ -242,28 +207,22 @@ class Main:
                 return None, None
 
         def _bounds_raw(col: str, lo, hi):
-            """Convert slider bounds -> raw bounds for a specific column."""
             lo_f, hi_f = _as_float_pair([lo, hi])
             if lo_f is None or hi_f is None:
                 return None, None
-
-            # Ensure ordering
             if lo_f > hi_f:
                 lo_f, hi_f = hi_f, lo_f
 
-            # Unit conversions
+            # slider units -> raw units
             if col == "Total_Population":
                 lo_f *= 1_000_000.0
                 hi_f *= 1_000_000.0
             elif col == "Real_GDP_per_Capita_USD":
                 lo_f *= 1_000.0
                 hi_f *= 1_000.0
-            # Percent-based columns: already in % (no conversion)
-            # Migration: keep raw
 
             return lo_f, hi_f
 
-        # Slider bounds -> raw bounds
         gdp_lo, gdp_hi = _bounds_raw("Real_GDP_per_Capita_USD", *_get("Real_GDP_per_Capita_USD"))
         pop_lo, pop_hi = _bounds_raw("Total_Population", *_get("Total_Population"))
         pg_lo, pg_hi = _bounds_raw("Population_Growth_Rate", *_get("Population_Growth_Rate"))
@@ -292,24 +251,82 @@ class Main:
         )
 
     def _normalize_0_100(self, df: pd.DataFrame, col: str, invert: bool = False) -> pd.Series:
-        """Min-max normalize a column to 0..100 within the given df."""
         s = self._safe_numeric_series(df[col], default=np.nan)
-        mn = float(np.nanmin(s.to_numpy(dtype=float))) if np.isfinite(np.nanmin(s.to_numpy(dtype=float))) else 0.0
-        mx = float(np.nanmax(s.to_numpy(dtype=float))) if np.isfinite(np.nanmax(s.to_numpy(dtype=float))) else 1.0
-        if mx - mn < 1e-12:
+        arr = s.to_numpy(dtype=float)
+
+        if np.all(~np.isfinite(arr)):
             out = np.zeros(len(df), dtype=float)
         else:
-            out = (s.to_numpy(dtype=float) - mn) / (mx - mn) * 100.0
+            mn = float(np.nanmin(arr))
+            mx = float(np.nanmax(arr))
+            if mx - mn < 1e-12:
+                out = np.zeros(len(df), dtype=float)
+            else:
+                out = (arr - mn) / (mx - mn) * 100.0
+
         if invert:
             out = 100.0 - out
         return pd.Series(out, index=df.index)
 
+    def _fmt_raw_value(self, col: str, x):
+        if x is None or (isinstance(x, float) and not np.isfinite(x)):
+            return "—"
+        try:
+            xf = float(x)
+        except Exception:
+            return str(x)
+
+        if col == "Real_GDP_per_Capita_USD":
+            return f"${xf:,.0f}"
+        if col == "Total_Population":
+            return f"{xf:,.0f}"
+        if col in {"Population_Growth_Rate", "Unemployment_Rate_percent", "Public_Debt_percent_of_GDP"}:
+            return f"{xf:.2f}%"
+        if col == "Net_Migration_Rate":
+            return f"{xf:.2f}"
+        return f"{xf:.2f}"
+
+    # ---------- Helper: apply PCP constraints ----------
+    def _apply_constraints(self, df: pd.DataFrame, constraints: dict) -> pd.DataFrame:
+        if not constraints:
+            return df
+
+        def _in_ranges(x, r):
+            if x is None or (isinstance(x, float) and not np.isfinite(x)):
+                return False
+            try:
+                xf = float(x)
+            except Exception:
+                return False
+
+            # r can be [lo, hi] OR [[lo, hi], [lo2, hi2], ...]
+            if isinstance(r, (list, tuple)) and len(r) == 2 and not isinstance(r[0], (list, tuple)):
+                lo, hi = r
+                return float(lo) <= xf <= float(hi)
+
+            if isinstance(r, (list, tuple)) and len(r) > 0 and isinstance(r[0], (list, tuple)):
+                for seg in r:
+                    if isinstance(seg, (list, tuple)) and len(seg) == 2:
+                        lo, hi = seg
+                        if float(lo) <= xf <= float(hi):
+                            return True
+                return False
+
+            return True
+
+        mask = np.ones(len(df), dtype=bool)
+        for lab, r in constraints.items():
+            if lab not in df.columns:
+                continue
+            colvals = df[lab].values
+            mask &= np.array([_in_ranges(v, r) for v in colvals], dtype=bool)
+
+        return df.loc[mask].copy()
+
     # ---------- Callbacks ----------
     def register_callbacks(self):
 
-        # -----------------------------
-        # Sidebar state: collapse only
-        # -----------------------------
+        # Sidebar collapse state
         @self.app.callback(
             Output("sidebar-state", "data"),
             Input("sidebar-collapse-btn", "n_clicks"),
@@ -319,10 +336,8 @@ class Main:
         def update_sidebar_state(collapse_clicks, state):
             if state is None:
                 state = {"collapsed": False}
-
             if ctx.triggered_id != "sidebar-collapse-btn":
                 raise PreventUpdate
-
             state["collapsed"] = not state.get("collapsed", False)
             return state
 
@@ -334,9 +349,7 @@ class Main:
         def apply_sidebar_classes(state):
             if not state:
                 state = {"collapsed": False}
-
             collapsed = state.get("collapsed", False)
-
             sidebar_class = "sidebar sidebar--collapsed" if collapsed else "sidebar"
             content_class = (
                 "map-and-analytics-container map-and-analytics-container--collapsed"
@@ -345,11 +358,7 @@ class Main:
             )
             return sidebar_class, content_class
 
-        # -----------------------------
-        # Filter range display (min/max shown next to each slider)
-        # Expects RangeSliders with id={"type": "filter-slider", "col": <col>}
-        # and a label span with id={"type": "filter-value", "col": <col>}
-        # -----------------------------
+        # Filter range display labels
         @self.app.callback(
             Output({"type": "filter-range-value", "col": ALL}, "children"),
             Input({"type": "filter-range", "col": ALL}, "value"),
@@ -379,20 +388,17 @@ class Main:
                     return f"{xf_str}%"
                 return xf_str
 
-            labels = []
+            labels_out = []
             for v, i in zip(values_list, ids_list):
                 col = str(i.get("col"))
                 if isinstance(v, (list, tuple)) and len(v) == 2:
                     lo, hi = v
-                    labels.append(f"{_fmt(col, lo)}–{_fmt(col, hi)}")
+                    labels_out.append(f"{_fmt(col, lo)}–{_fmt(col, hi)}")
                 else:
-                    labels.append(str(v))
+                    labels_out.append(str(v))
+            return labels_out
 
-            return labels
-
-        # -----------------------------
-        # Apply filters (snapshot RangeSlider values when Apply is clicked)
-        # -----------------------------
+        # Apply filters snapshot
         @self.app.callback(
             Output("filters-applied-store", "data"),
             Input("apply-weights-btn", "n_clicks"),
@@ -406,20 +412,56 @@ class Main:
             filters = self._filters_from_ranges(values_list, ids_list)
             return filters
 
-        # -----------------------------
-        # Map updates (Mode-B)
-        # -----------------------------
+        # -------------------------------------------------
+        # Country selection from MAP OR SCATTER
+        # -------------------------------------------------
+        @self.app.callback(
+            Output("selected-country-store", "data"),
+            Input("world-map", "clickData"),
+            Input("score-attr-scatter", "clickData"),
+            prevent_initial_call=True,
+        )
+        def set_country_store(map_click, scatter_click):
+            trig = ctx.triggered_id
+
+            if trig == "world-map":
+                clickData = map_click
+                if not clickData or "points" not in clickData or not clickData["points"]:
+                    raise PreventUpdate
+                p = clickData["points"][0]
+                if p.get("location"):
+                    return str(p["location"])
+                if p.get("text"):
+                    return str(p["text"])
+                raise PreventUpdate
+
+            if trig == "score-attr-scatter":
+                clickData = scatter_click
+                if not clickData or "points" not in clickData or not clickData["points"]:
+                    raise PreventUpdate
+                p = clickData["points"][0]
+                if p.get("hovertext"):
+                    return str(p["hovertext"])
+                if p.get("text"):
+                    return str(p["text"])
+                raise PreventUpdate
+
+            raise PreventUpdate
+
+        # -------------------------------------------------
+        # MAP updates + highlight selected country
+        # -------------------------------------------------
         @self.app.callback(
             Output("world-map", "figure"),
             Input("filters-applied-store", "data"),
+            Input("selected-country-store", "data"),
         )
-        def update_map(filters_applied):
+        def update_map(filters_applied, selected_country):
             filters_applied = filters_applied or {}
 
             try:
                 scored_df = self._score_mode_b(scoring_df, filters_applied)
             except Exception:
-                # Fallback to global scoring if cohort scoring fails
                 try:
                     scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
                 except Exception:
@@ -441,14 +483,26 @@ class Main:
                 range_color=(0, 100),
             )
 
-            fig.update_traces(
-                marker_line_width=1.5,
-                marker_line_color="rgba(255,255,255,0.15)",
-            )
+            fig.update_traces(marker_line_width=1.5, marker_line_color="rgba(255,255,255,0.15)")
+
+            # outline selected country
+            if selected_country:
+                df_sel = df_plot[df_plot["Country"].astype(str) == str(selected_country)]
+                if not df_sel.empty:
+                    fig.add_trace(
+                        go.Choropleth(
+                            locations=df_sel["Country"],
+                            locationmode="country names",
+                            z=[1] * len(df_sel),
+                            colorscale=[[0, "rgba(0,0,0,0)"], [1, "rgba(0,0,0,0)"]],
+                            showscale=False,
+                            marker_line_width=4,
+                            marker_line_color="#66fcf1",
+                            hoverinfo="skip",
+                        )
+                    )
 
             fig.update_layout(
-                title_font=dict(family="Inter, sans-serif", size=22, color="white"),
-                font=dict(family="Inter, sans-serif", color="white"),
                 margin={"r": 0, "t": 60, "l": 0, "b": 0},
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
@@ -462,21 +516,19 @@ class Main:
                     countrycolor="#45a29e",
                     projection_type="natural earth",
                 ),
-                font_color="white",
+                font=dict(family="Inter, sans-serif", color="white"),
             )
-
             return fig
 
-        # -----------------------------
-        # Top 5 (Mode-B)
-        # -----------------------------
+        # -------------------------------------------------
+        # Top 5
+        # -------------------------------------------------
         @self.app.callback(
             Output("top-5-chart", "children"),
             Input("filters-applied-store", "data"),
         )
         def top5(filters_applied):
             filters_applied = filters_applied or {}
-
             try:
                 scored_df = self._score_mode_b(scoring_df, filters_applied)
             except Exception:
@@ -490,21 +542,14 @@ class Main:
             if df_top.empty:
                 return "No data"
 
-            bar_fig = px.bar(
-                df_top,
-                x="Country",
-                y=score_col,
-                title=None,
-                color_discrete_sequence=["#1f5c52"],
-            )
+            bar_fig = px.bar(df_top, x="Country", y=score_col, title=None, color_discrete_sequence=["#1f5c52"])
             bar_fig = self._dark_fig_layout(bar_fig)
-            bar_fig.update_yaxes(range=[0, 100])
-            bar_fig.update_yaxes(title="Real Estate Opportunity Score (0–100)")
+            bar_fig.update_yaxes(range=[0, 100], title="Real Estate Opportunity Score (0–100)")
             return dcc.Graph(figure=bar_fig, config={"displayModeBar": False})
 
-        # -----------------------------
-        # Score vs Attribute Scatter: dropdown options
-        # -----------------------------
+        # -------------------------------------------------
+        # Scatter dropdown init
+        # -------------------------------------------------
         @self.app.callback(
             Output("scatter-y-attr", "options"),
             Input("plotly-resize-signal", "data"),
@@ -513,19 +558,19 @@ class Main:
         def _init_scatter_dropdown(_):
             return [{"label": o["label"], "value": o["col"]} for o in SCATTER_Y_OPTIONS]
 
-        # -----------------------------
-        # Score vs Attribute Scatter: main figure
-        # -----------------------------
+        # -------------------------------------------------
+        # Scatter figure + highlight selected
+        # -------------------------------------------------
         @self.app.callback(
             Output("score-attr-scatter", "figure"),
             Input("filters-applied-store", "data"),
             Input("scatter-y-attr", "value"),
+            Input("selected-country-store", "data"),
         )
-        def update_score_attr_scatter(filters_applied, y_col):
+        def update_score_attr_scatter(filters_applied, y_col, selected_country):
             filters_applied = filters_applied or {}
             y_col = y_col or "Real_GDP_per_Capita_USD"
 
-            # Lookup label/unit/scale
             meta = next((o for o in SCATTER_Y_OPTIONS if o["col"] == y_col), None)
             if meta is None:
                 meta = {"col": y_col, "label": y_col, "unit": "", "scale": 1.0}
@@ -538,9 +583,6 @@ class Main:
                 except Exception:
                     return self._empty_message_fig("No data")
 
-            if scored_df is None or len(scored_df) == 0 or y_col not in scored_df.columns:
-                return self._empty_message_fig("No data")
-
             dfp = scored_df[["Country", "RE_Opp", y_col]].copy()
             dfp["RE_Opp"] = self._safe_numeric_series(dfp["RE_Opp"], default=np.nan)
             dfp[y_col] = self._safe_numeric_series(dfp[y_col], default=np.nan)
@@ -548,7 +590,6 @@ class Main:
             if dfp.empty:
                 return self._empty_message_fig("No data")
 
-            # Scale Y for readability
             y_scaled = dfp[y_col] / float(meta.get("scale", 1.0) or 1.0)
             y_title = meta["label"] + (f" ({meta['unit']})" if meta.get("unit") else "")
 
@@ -560,18 +601,33 @@ class Main:
                 title=f"Score vs {meta['label']}",
                 color_discrete_sequence=["#38a89a"],
             )
-
             fig.update_traces(marker=dict(size=7, opacity=0.65))
 
+            if selected_country:
+                hit = dfp[dfp["Country"].astype(str) == str(selected_country)]
+                if not hit.empty:
+                    xv = float(hit.iloc[0]["RE_Opp"])
+                    yv = float(hit.iloc[0][y_col]) / float(meta.get("scale", 1.0) or 1.0)
+                    fig.add_trace(
+                        go.Scatter(
+                            x=[xv],
+                            y=[yv],
+                            mode="markers+text",
+                            text=[str(selected_country)],
+                            textposition="top center",
+                            marker=dict(size=16, color="#66fcf1", opacity=0.95),
+                            hoverinfo="skip",
+                            showlegend=False,
+                        )
+                    )
+
             fig.update_layout(
-                title_font=dict(family="Inter, sans-serif", size=16, color="white"),
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 font=dict(family="Inter, sans-serif", color="white"),
                 margin=dict(l=10, r=10, t=50, b=10),
                 showlegend=False,
             )
-
             fig.update_xaxes(
                 title="Real Estate Opportunity Score (0–100)",
                 range=[0, 100],
@@ -579,43 +635,24 @@ class Main:
                 gridcolor="rgba(255,255,255,0.08)",
                 zerolinecolor="rgba(255,255,255,0.12)",
             )
-
             fig.update_yaxes(
                 title=y_title,
                 color="white",
                 gridcolor="rgba(255,255,255,0.08)",
                 zerolinecolor="rgba(255,255,255,0.12)",
             )
-
             return fig
 
-        # -----------------------------
-        # Country click -> store
-        # -----------------------------
-        @self.app.callback(
-            Output("selected-country-store", "data"),
-            Input("world-map", "clickData"),
-            prevent_initial_call=True,
-        )
-        def set_country_store(clickData):
-            if not clickData or "points" not in clickData or not clickData["points"]:
-                raise PreventUpdate
-
-            p = clickData["points"][0]
-            if p.get("location"):
-                return str(p["location"])
-            if p.get("text"):
-                return str(p["text"])
-            raise PreventUpdate
-
-        # -----------------------------
-        # Drilldown: SPLOM + PCP (CLEAN VERSION)
-        # -----------------------------
+        # -------------------------------------------------
+        # Drilldown: Radar + Values + PCP + cohort store
+        # -------------------------------------------------
         @self.app.callback(
             Output("drilldown-country-title", "children"),
             Output("drilldown-investor-label", "children"),
-            Output("drilldown-splom", "figure"),
+            Output("drilldown-radar", "figure"),
+            Output("drilldown-values", "children"),
             Output("drilldown-pcp", "figure"),
+            Output("drilldown-cohort-store", "data"),
             Input("selected-country-store", "data"),
             Input("filters-applied-store", "data"),
         )
@@ -625,30 +662,33 @@ class Main:
                 filters_applied = filters_applied or {}
 
                 if not selected_country:
+                    placeholder_fig = self._empty_message_fig("Click a country on the map.")
+                    values_box = [html.Div(style={"color": "#9aa4b2", "fontSize": "12px"}, children="Select a country to see exact values.")]
                     return (
                         "Click a country on the map",
                         investor_label,
-                        self._empty_message_fig("Click a country to show SPLOM."),
-                        self._empty_message_fig("Click a country to show PCP."),
+                        placeholder_fig,
+                        values_box,
+                        placeholder_fig,
+                        None,
                     )
 
-                # Score the current cohort (Mode B) so drilldown matches the filtered view
+                # Score cohort
                 try:
                     scored_df = self._score_mode_b(scoring_df, filters_applied)
                 except Exception:
                     scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
 
                 score_col = "RE_Opp"
-
                 hit = scored_df[scored_df["Country"].astype(str) == str(selected_country)]
                 if hit.empty:
                     msg = f"Country not found: {selected_country}"
-                    return msg, investor_label, self._empty_message_fig(msg), self._empty_message_fig(msg)
+                    placeholder_fig = self._empty_message_fig(msg)
+                    values_box = [html.Div(style={"color": "#9aa4b2", "fontSize": "12px"}, children=msg)]
+                    return msg, investor_label, placeholder_fig, values_box, placeholder_fig, None
 
-                # Comparison set
                 df_sub = self._subset_nearest(scored_df, str(selected_country), score_col, n=60).copy()
 
-                # Use the 6 RE input attributes for multivariate views
                 raw_cols = [
                     ("Real_GDP_per_Capita_USD", "GDP/cap", False),
                     ("Total_Population", "Pop", False),
@@ -669,37 +709,77 @@ class Main:
 
                 title = f"{selected_country} — {investor_label} | Compare: {len(df_sub)}"
 
-                # ---------- SPLOM ----------
-                splom_fig = px.scatter_matrix(
-                    df_sub,
-                    dimensions=labels,
-                    color=score_col,
-                    hover_name="Country",
-                    color_continuous_scale=GREEN_SCALE,
-                )
+                # ---------- RADAR ----------
+                df_sel = df_sub[df_sub["Country"].astype(str) == str(selected_country)].head(1)
+                if df_sel.empty:
+                    radar_fig = self._empty_message_fig("No data for selected country.")
+                else:
+                    sel_vals = [float(df_sel.iloc[0][lab]) for lab in labels]
+                    med_vals = [float(np.nanmedian(self._safe_numeric_series(df_sub[lab], np.nan))) for lab in labels]
 
-                splom_fig.update_traces(
-                    diagonal_visible=False,
-                    showupperhalf=False,
-                    showlowerhalf=True,
-                    marker=dict(size=5, opacity=0.55),
-                )
+                    theta = labels + [labels[0]]
+                    r_sel = sel_vals + [sel_vals[0]]
+                    r_med = med_vals + [med_vals[0]]
 
-                sel_mask = df_sub["Country"].astype(str).values == str(selected_country)
-                if len(splom_fig.data) > 0:
-                    sizes = np.where(sel_mask, 12, 5)
-                    splom_fig.data[0].update(marker=dict(size=sizes, opacity=0.65))
+                    radar_fig = go.Figure()
+                    radar_fig.add_trace(go.Scatterpolar(r=r_med, theta=theta, fill="toself", name="Cohort median", opacity=0.25))
+                    radar_fig.add_trace(go.Scatterpolar(r=r_sel, theta=theta, fill="toself", name=str(selected_country), opacity=0.80))
+                    radar_fig.update_layout(
+                        paper_bgcolor="rgba(0,0,0,0)",
+                        plot_bgcolor="rgba(0,0,0,0)",
+                        font=dict(family="Inter, sans-serif", color="white"),
+                        margin=dict(l=20, r=20, t=10, b=10),
+                        showlegend=True,
+                        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0, font=dict(size=11)),
+                        polar=dict(
+                            bgcolor="rgba(0,0,0,0)",
+                            radialaxis=dict(visible=True, range=[0, 100], tickfont=dict(color="rgba(255,255,255,0.7)", size=10),
+                                            gridcolor="rgba(255,255,255,0.10)"),
+                            angularaxis=dict(tickfont=dict(color="rgba(255,255,255,0.85)", size=11),
+                                             gridcolor="rgba(255,255,255,0.10)"),
+                        ),
+                    )
 
-                splom_fig.update_layout(
-                    title=None,
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(family="Inter, sans-serif", color="white", size=11),
-                    margin=dict(l=10, r=10, t=10, b=10),
-                    coloraxis_showscale=False,
+                # ---------- VALUES PANEL ----------
+                sel_row = hit.iloc[0]
+
+                def _row(lbl, val):
+                    return html.Div(
+                        style={
+                            "display": "flex",
+                            "justifyContent": "space-between",
+                            "gap": "12px",
+                            "padding": "6px 0px",
+                            "borderBottom": "1px solid rgba(255,255,255,0.06)",
+                        },
+                        children=[
+                            html.Span(lbl, style={"color": "#9aa4b2", "fontSize": "12px"}),
+                            html.Span(val, style={"color": "white", "fontSize": "12px", "fontWeight": 600}),
+                        ],
+                    )
+
+                values_rows = []
+                values_rows.append(
+                    html.Div(
+                        style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "8px"},
+                        children=[
+                            html.Span("EXACT VALUES", style={"color": "#9aa4b2", "fontSize": "11px", "letterSpacing": "0.14em"}),
+                            html.Span(
+                                f"Score: {float(sel_row.get('RE_Opp', 0.0)):.1f}/100",
+                                style={"color": "white", "fontSize": "12px", "fontWeight": 700},
+                            ),
+                        ],
+                    )
                 )
-                splom_fig.update_xaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)")
-                splom_fig.update_yaxes(showgrid=True, gridcolor="rgba(255,255,255,0.06)")
+                values_rows.extend([
+                    _row("GDP per Capita (USD)", self._fmt_raw_value("Real_GDP_per_Capita_USD", sel_row.get("Real_GDP_per_Capita_USD"))),
+                    _row("Population", self._fmt_raw_value("Total_Population", sel_row.get("Total_Population"))),
+                    _row("Population Growth (%)", self._fmt_raw_value("Population_Growth_Rate", sel_row.get("Population_Growth_Rate"))),
+                    _row("Net Migration Rate", self._fmt_raw_value("Net_Migration_Rate", sel_row.get("Net_Migration_Rate"))),
+                    _row("Unemployment (%)", self._fmt_raw_value("Unemployment_Rate_percent", sel_row.get("Unemployment_Rate_percent"))),
+                    _row("Public Debt (% of GDP)", self._fmt_raw_value("Public_Debt_percent_of_GDP", sel_row.get("Public_Debt_percent_of_GDP"))),
+                ])
+                values_box = values_rows
 
                 # ---------- PCP ----------
                 df_sub_sorted = df_sub.sort_values(score_col, ascending=False).copy()
@@ -714,11 +794,13 @@ class Main:
                 ]
 
                 pcp_fig = go.Figure()
+
+                # base dimmed lines (rgba colorscale)
                 pcp_fig.add_trace(
                     go.Parcoords(
                         line=dict(
                             color=self._safe_numeric_series(pcp_df[score_col], 0.0).values,
-                            colorscale=GREEN_SCALE,
+                            colorscale=DIM_GREEN_SCALE,
                             cmin=float(pcp_df[score_col].min()),
                             cmax=float(pcp_df[score_col].max()),
                             showscale=True,
@@ -729,41 +811,219 @@ class Main:
                     )
                 )
 
-                df_sel = pcp_df[pcp_df["Country"].astype(str) == str(selected_country)]
-                if not df_sel.empty:
+                # selected overlay (cyan)
+                df_sel2 = pcp_df[pcp_df["Country"].astype(str) == str(selected_country)]
+                if not df_sel2.empty:
                     dims_sel = [
-                        dict(label=lab, range=[0, 100], values=self._safe_numeric_series(df_sel[lab], 0.0).values)
+                        dict(label=lab, range=[0, 100], values=self._safe_numeric_series(df_sel2[lab], 0.0).values)
                         for lab in labels
                     ]
                     pcp_fig.add_trace(
                         go.Parcoords(
                             line=dict(
-                                color=[1.0] * len(df_sel),
-                                colorscale=[[0, "#66fcf1"], [1, "#66fcf1"]],
+                                color=[1.0] * len(df_sel2),
+                                colorscale=[[0, "rgba(102,252,241,1.0)"], [1, "rgba(102,252,241,1.0)"]],
                                 cmin=0.0,
                                 cmax=1.0,
                                 showscale=False,
                             ),
                             dimensions=dims_sel,
                             labelfont=dict(color="white", size=12),
-                            tickfont=dict(color="rgba(255,255,255,0.8)", size=10),
+                            tickfont=dict(color="rgba(255,255,255,0.85)", size=10),
                         )
                     )
 
                 pcp_fig.update_layout(
-                    title=None,
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
                     font=dict(family="Inter, sans-serif", color="white"),
                     margin=dict(l=10, r=10, t=10, b=10),
                 )
 
-                return title, investor_label, splom_fig, pcp_fig
+                cohort_payload = {
+                    "selected_country": str(selected_country),
+                    "score_col": "RE_Opp",
+                    "labels": labels,
+                    "records": df_sub[
+                        ["Country", "RE_Opp"] + labels + [
+                            "Real_GDP_per_Capita_USD",
+                            "Total_Population",
+                            "Population_Growth_Rate",
+                            "Net_Migration_Rate",
+                            "Unemployment_Rate_percent",
+                            "Public_Debt_percent_of_GDP",
+                        ]
+                    ].to_dict("records"),
+                }
+
+                return title, investor_label, radar_fig, values_box, pcp_fig, cohort_payload
 
             except Exception as e:
                 msg = f"Drilldown error: {type(e).__name__}: {e}"
                 investor_label = self.INVESTOR_LABEL
-                return msg, investor_label, self._empty_message_fig(msg), self._empty_message_fig(msg)
+                placeholder_fig = self._empty_message_fig(msg)
+                values_box = [html.Div(style={"color": "#9aa4b2", "fontSize": "12px"}, children=msg)]
+                return msg, investor_label, placeholder_fig, values_box, placeholder_fig, None
+
+        # -------------------------------------------------
+        # Store PCP brushing constraints
+        # -------------------------------------------------
+        @self.app.callback(
+            Output("pcp-brush-store", "data"),
+            Input("drilldown-pcp", "restyleData"),
+            State("drilldown-cohort-store", "data"),
+            prevent_initial_call=True,
+        )
+        def store_pcp_brush(restyleData, cohort_store):
+            if not cohort_store or "records" not in cohort_store:
+                raise PreventUpdate
+
+            if not restyleData or not isinstance(restyleData, (list, tuple)) or len(restyleData) == 0:
+                return {"constraints": {}}
+
+            patch = restyleData[0] if isinstance(restyleData[0], dict) else {}
+            labels = cohort_store.get("labels", [])
+
+            constraints = {}
+            for k, v in patch.items():
+                k = str(k)
+                if "constraintrange" not in k:
+                    continue
+                try:
+                    idx = int(k.split("dimensions[")[1].split("]")[0])
+                except Exception:
+                    continue
+                if idx < 0 or idx >= len(labels):
+                    continue
+                constraints[labels[idx]] = v
+
+            return {"constraints": constraints}
+
+        # -------------------------------------------------
+        # PCP brushing -> update RADAR + VALUES ONLY
+        # (don’t update PCP here or you lose the brush)
+        # -------------------------------------------------
+        @self.app.callback(
+            Output("drilldown-radar", "figure", allow_duplicate=True),
+            Output("drilldown-values", "children", allow_duplicate=True),
+            Input("pcp-brush-store", "data"),
+            State("drilldown-cohort-store", "data"),
+            prevent_initial_call=True,
+        )
+        def apply_pcp_brush_to_panels(brush_store, cohort_store):
+            if not cohort_store or "records" not in cohort_store:
+                raise PreventUpdate
+
+            constraints = (brush_store or {}).get("constraints", {}) if brush_store else {}
+            df = pd.DataFrame(cohort_store["records"])
+            labels = list(cohort_store.get("labels", []))
+            selected_country = str(cohort_store.get("selected_country", ""))
+
+            brushed_df = self._apply_constraints(df, constraints)
+            brushed_n = len(brushed_df)
+            cohort_for_median = brushed_df if constraints else df
+
+            sel_hit = df[df["Country"].astype(str) == selected_country].head(1)
+
+            # Radar
+            if sel_hit.empty or not labels:
+                radar_fig = self._empty_message_fig("No data.")
+            else:
+                sel_vals = [float(sel_hit.iloc[0][lab]) for lab in labels]
+                med_vals = [float(np.nanmedian(self._safe_numeric_series(cohort_for_median[lab], np.nan))) for lab in labels]
+
+                theta = labels + [labels[0]]
+                r_sel = sel_vals + [sel_vals[0]]
+                r_med = med_vals + [med_vals[0]]
+
+                radar_fig = go.Figure()
+                radar_fig.add_trace(
+                    go.Scatterpolar(
+                        r=r_med,
+                        theta=theta,
+                        fill="toself",
+                        name=("Brushed median" if constraints else "Cohort median"),
+                        opacity=0.25,
+                    )
+                )
+                radar_fig.add_trace(
+                    go.Scatterpolar(
+                        r=r_sel,
+                        theta=theta,
+                        fill="toself",
+                        name=str(selected_country),
+                        opacity=0.80,
+                    )
+                )
+                radar_fig.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(0,0,0,0)",
+                    font=dict(family="Inter, sans-serif", color="white"),
+                    margin=dict(l=20, r=20, t=10, b=10),
+                    showlegend=True,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0.0, font=dict(size=11)),
+                    polar=dict(
+                        bgcolor="rgba(0,0,0,0)",
+                        radialaxis=dict(visible=True, range=[0, 100], tickfont=dict(color="rgba(255,255,255,0.7)", size=10),
+                                        gridcolor="rgba(255,255,255,0.10)"),
+                        angularaxis=dict(tickfont=dict(color="rgba(255,255,255,0.85)", size=11),
+                                         gridcolor="rgba(255,255,255,0.10)"),
+                    ),
+                )
+
+            # Values panel
+            def _row(lbl, val):
+                return html.Div(
+                    style={
+                        "display": "flex",
+                        "justifyContent": "space-between",
+                        "gap": "12px",
+                        "padding": "6px 0px",
+                        "borderBottom": "1px solid rgba(255,255,255,0.06)",
+                    },
+                    children=[
+                        html.Span(lbl, style={"color": "#9aa4b2", "fontSize": "12px"}),
+                        html.Span(val, style={"color": "white", "fontSize": "12px", "fontWeight": 600}),
+                    ],
+                )
+
+            if sel_hit.empty:
+                return radar_fig, [html.Div(style={"color": "#9aa4b2", "fontSize": "12px"}, children="No selected country row.")]
+
+            sel_row = sel_hit.iloc[0]
+            score = float(sel_row.get("RE_Opp", 0.0))
+
+            in_brush = True
+            if constraints:
+                in_brush = not brushed_df[brushed_df["Country"].astype(str) == selected_country].empty
+            warn = " (selected OUTSIDE brush)" if (constraints and not in_brush) else ""
+
+            values_rows = []
+            values_rows.append(
+                html.Div(
+                    style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "8px"},
+                    children=[
+                        html.Span("EXACT VALUES", style={"color": "#9aa4b2", "fontSize": "11px", "letterSpacing": "0.14em"}),
+                        html.Span(f"Score: {score:.1f}/100", style={"color": "white", "fontSize": "12px", "fontWeight": 700}),
+                    ],
+                )
+            )
+            values_rows.append(
+                html.Div(
+                    style={"color": "rgba(255,255,255,0.75)", "fontSize": "11px", "marginBottom": "8px"},
+                    children=(f"Brushed cohort: {brushed_n}{warn}" if constraints else "Brushed cohort: (none)"),
+                )
+            )
+            values_rows.extend([
+                _row("GDP per Capita (USD)", self._fmt_raw_value("Real_GDP_per_Capita_USD", sel_row.get("Real_GDP_per_Capita_USD"))),
+                _row("Population", self._fmt_raw_value("Total_Population", sel_row.get("Total_Population"))),
+                _row("Population Growth (%)", self._fmt_raw_value("Population_Growth_Rate", sel_row.get("Population_Growth_Rate"))),
+                _row("Net Migration Rate", self._fmt_raw_value("Net_Migration_Rate", sel_row.get("Net_Migration_Rate"))),
+                _row("Unemployment (%)", self._fmt_raw_value("Unemployment_Rate_percent", sel_row.get("Unemployment_Rate_percent"))),
+                _row("Public Debt (% of GDP)", self._fmt_raw_value("Public_Debt_percent_of_GDP", sel_row.get("Public_Debt_percent_of_GDP"))),
+            ])
+
+            return radar_fig, values_rows
 
     # ---------- Layout ----------
     def setup_layout(self):
@@ -773,9 +1033,11 @@ class Main:
                 dcc.Store(id="sidebar-state", data={"collapsed": False}),
                 dcc.Store(id="plotly-resize-signal", data=0),
 
-                # Selection state
                 dcc.Store(id="selected-country-store", storage_type="memory"),
                 dcc.Store(id="filters-applied-store", storage_type="memory"),
+
+                dcc.Store(id="drilldown-cohort-store", storage_type="memory"),
+                dcc.Store(id="pcp-brush-store", storage_type="memory"),
 
                 self.sidebar.render(),
 
@@ -797,4 +1059,3 @@ class Main:
 if __name__ == "__main__":
     main = Main()
     main.run()
-
