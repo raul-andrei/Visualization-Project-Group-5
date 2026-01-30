@@ -186,12 +186,7 @@ class Sidebar:
                             n_clicks=0,
                             className="weights-apply-btn",
                         ),
-                        html.Button(
-                            "Reset",
-                            id="reset-filters-btn",
-                            n_clicks=0,
-                            className="weights-apply-btn",
-                        ),
+                        
                     ],
                 ),
             ],

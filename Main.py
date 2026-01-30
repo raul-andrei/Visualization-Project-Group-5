@@ -38,8 +38,6 @@ GREEN_SCALE = [
     [1.00, "#8ffdf4"],
 ]
 
-# PCP base lines dimming: Parcoords DOES NOT support opacity,
-# so we dim by using RGBA colors in the colorscale.
 DIM_GREEN_SCALE = [
     [0.00, "rgba(11,19,17,0.18)"],
     [0.10, "rgba(16,35,31,0.18)"],
@@ -107,6 +105,7 @@ class Main:
                 projection_type="natural earth",
             ),
             dragmode=False,
+            uirevision="world-map",
         )
         return fig
 
@@ -269,7 +268,6 @@ class Main:
         return pd.Series(out, index=df.index)
 
     def _add_re_norm_axes(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Add normalized 0–100 axes used for PCP brushing (fixed labels)."""
         out = df.copy()
         raw_cols = [
             ("Real_GDP_per_Capita_USD", "GDP/cap", False),
@@ -316,7 +314,6 @@ class Main:
             except Exception:
                 return False
 
-            # r can be [lo, hi] OR [[lo, hi], [lo2, hi2], ...]
             if isinstance(r, (list, tuple)) and len(r) == 2 and not isinstance(r[0], (list, tuple)):
                 lo, hi = r
                 return float(lo) <= xf <= float(hi)
@@ -341,20 +338,17 @@ class Main:
         return df.loc[mask].copy()
 
     def _apply_intersection(self, scored_df: pd.DataFrame, scatter_store: dict, pcp_store: dict) -> pd.DataFrame:
-        """Intersection-mode brush: (scatter selected countries) AND (PCP constraintrange)."""
         df = scored_df.copy()
 
-        # Scatter selection filter
         scatter_countries = []
         if scatter_store and isinstance(scatter_store, dict):
             scatter_countries = scatter_store.get("countries", []) or []
         if scatter_countries:
             df = df[df["Country"].astype(str).isin([str(c) for c in scatter_countries])].copy()
 
-        # PCP constraints filter (constraints are on normalized axes labels)
         constraints = {}
         if pcp_store and isinstance(pcp_store, dict):
-            constraints = (pcp_store.get("constraints") or {}) if "constraints" in pcp_store else (pcp_store.get("constraints", {}) or {})
+            constraints = pcp_store.get("constraints", {}) or {}
         if constraints:
             df = self._add_re_norm_axes(df)
             df = self._apply_constraints(df, constraints)
@@ -450,53 +444,79 @@ class Main:
             filters = self._filters_from_ranges(values_list, ids_list)
             return filters
 
-        # -------------------------------------------------
-        # Country selection from MAP OR SCATTER
-        # -------------------------------------------------
+        # Keep map camera stable
+        @self.app.callback(
+            Output("world-map-view-store", "data"),
+            Input("world-map", "relayoutData"),
+            State("world-map-view-store", "data"),
+            prevent_initial_call=True,
+        )
+        def store_map_view(relayoutData, current):
+            if not isinstance(relayoutData, dict):
+                raise PreventUpdate
+
+            allowed_keys = {
+                "geo.center",
+                "geo.center.lon",
+                "geo.center.lat",
+                "geo.projection.scale",
+                "geo.lonaxis.range",
+                "geo.lataxis.range",
+            }
+            keep = {k: v for k, v in relayoutData.items() if k in allowed_keys}
+
+            if not keep:
+                raise PreventUpdate
+
+            merged = dict(current or {})
+            merged.update(keep)
+            return merged
+
+        # Country selection from MAP OR SCATTER (toggle off on same country)
         @self.app.callback(
             Output("selected-country-store", "data"),
             Input("world-map", "clickData"),
             Input("score-attr-scatter", "clickData"),
+            State("selected-country-store", "data"),
             prevent_initial_call=True,
         )
-        def set_country_store(map_click, scatter_click):
+        def set_country_store(map_click, scatter_click, current_selected):
             trig = ctx.triggered_id
 
             if trig == "world-map":
-                clickData = map_click
-                if not clickData or "points" not in clickData or not clickData["points"]:
+                if not map_click or "points" not in map_click or not map_click["points"]:
                     raise PreventUpdate
-                p = clickData["points"][0]
-                if p.get("location"):
-                    return str(p["location"])
-                if p.get("text"):
-                    return str(p["text"])
-                raise PreventUpdate
+                p = map_click["points"][0]
+                clicked = str(p.get("location") or p.get("text") or "")
+                if not clicked:
+                    raise PreventUpdate
+                if current_selected and str(current_selected) == clicked:
+                    return None
+                return clicked
 
             if trig == "score-attr-scatter":
-                clickData = scatter_click
-                if not clickData or "points" not in clickData or not clickData["points"]:
+                if not scatter_click or "points" not in scatter_click or not scatter_click["points"]:
                     raise PreventUpdate
-                p = clickData["points"][0]
-                if p.get("hovertext"):
-                    return str(p["hovertext"])
-                if p.get("text"):
-                    return str(p["text"])
-                raise PreventUpdate
+                p = scatter_click["points"][0]
+                clicked = str(p.get("hovertext") or p.get("text") or "")
+                if not clicked:
+                    raise PreventUpdate
+                if current_selected and str(current_selected) == clicked:
+                    return None
+                return clicked
 
             raise PreventUpdate
 
-        # -------------------------------------------------
-        # MAP updates + highlight selected country
-        # -------------------------------------------------
+        # MAP updates + highlight selected country (filtered by scatter + pcp)
         @self.app.callback(
             Output("world-map", "figure"),
             Input("filters-applied-store", "data"),
             Input("selected-country-store", "data"),
             Input("scatter-brush-store", "data"),
             Input("pcp-brush-store", "data"),
+            State("world-map-view-store", "data"),
         )
-        def update_map(filters_applied, selected_country, scatter_store, pcp_store):
+        def update_map(filters_applied, selected_country, scatter_store, pcp_store, map_view_store):
             filters_applied = filters_applied or {}
 
             try:
@@ -524,10 +544,8 @@ class Main:
                 color_continuous_scale=GREEN_SCALE,
                 range_color=(0, 100),
             )
-
             fig.update_traces(marker_line_width=1.5, marker_line_color="rgba(255,255,255,0.15)")
 
-            # outline selected country
             if selected_country:
                 df_sel = df_plot[df_plot["Country"].astype(str) == str(selected_country)]
                 if not df_sel.empty:
@@ -559,12 +577,15 @@ class Main:
                     projection_type="natural earth",
                 ),
                 font=dict(family="Inter, sans-serif", color="white"),
+                uirevision="world-map",
             )
+
+            if isinstance(map_view_store, dict) and map_view_store:
+                fig.update_layout(**map_view_store)
+
             return fig
 
-        # -------------------------------------------------
-        # Top 5
-        # -------------------------------------------------
+        # Top 5 (filtered by scatter + pcp)
         @self.app.callback(
             Output("top-5-chart", "children"),
             Input("filters-applied-store", "data"),
@@ -593,9 +614,7 @@ class Main:
             bar_fig.update_yaxes(range=[0, 100], title="Real Estate Opportunity Score (0–100)")
             return dcc.Graph(figure=bar_fig, config={"displayModeBar": False})
 
-        # -------------------------------------------------
         # Scatter dropdown init
-        # -------------------------------------------------
         @self.app.callback(
             Output("scatter-y-attr", "options"),
             Input("plotly-resize-signal", "data"),
@@ -604,37 +623,46 @@ class Main:
         def _init_scatter_dropdown(_):
             return [{"label": o["label"], "value": o["col"]} for o in SCATTER_Y_OPTIONS]
 
-        # -------------------------------------------------
         # Scatter brushing -> store selected countries
-        # Also clears brush on relayout/double-click
-        # -------------------------------------------------
+        # Clear ONLY on double-click reset; ignore redraw noise.
         @self.app.callback(
             Output("scatter-brush-store", "data", allow_duplicate=True),
             Input("score-attr-scatter", "selectedData"),
+            Input("score-attr-scatter", "relayoutData"),
             State("scatter-brush-store", "data"),
             prevent_initial_call=True,
         )
-        def store_scatter_brush(selectedData, current_store):
-            """Persist scatter lasso/box selection in a store.
+        def store_scatter_brush(selectedData, relayoutData, current_store):
+            current_store = current_store or {"countries": []}
 
-            IMPORTANT:
-            - Do NOT clear the brush on figure redraws (e.g., clicking the map highlights a country and re-renders the scatter).
-              Plotly/Dash can emit transient relayout/selection events during redraw that look like a clear.
-            - We only update the store when we receive an actual selectedData payload with points.
-            - We clear ONLY when Plotly explicitly sends an empty points list.
-            """
+            def _is_resize_noise(r):
+                return isinstance(r, dict) and (r.get("autosize") is True or "width" in r or "height" in r)
 
-            # Ignore redraw/noise
-            if selectedData is None:
-                raise PreventUpdate
+            def _is_reset_signal(r):
+                if not isinstance(r, dict):
+                    return False
+                # Most reliable: autorange on either axis
+                if r.get("xaxis.autorange") is True or r.get("yaxis.autorange") is True:
+                    return True
+                # Some versions: selection cleared via selections=[]
+                if r.get("selections") == [] or r.get("selections") is None:
+                    return True
+                return False
 
+            # Clear brush on reset (and NOT on resize noise)
+            if _is_reset_signal(relayoutData) and not _is_resize_noise(relayoutData):
+                if current_store.get("countries"):
+                    return {"countries": []}
+                return {"countries": []}
+
+            # Update store on real selection points
             if not isinstance(selectedData, dict) or "points" not in selectedData:
                 raise PreventUpdate
 
             pts = selectedData.get("points") or []
             if len(pts) == 0:
-                # Explicit clear from Plotly
-                return {"countries": []}
+                # usually redraw noise; real clear handled above
+                raise PreventUpdate
 
             countries = []
             for p in pts:
@@ -642,7 +670,6 @@ class Main:
                 if c:
                     countries.append(str(c))
 
-            # de-dup while preserving order
             seen = set()
             uniq = []
             for c in countries:
@@ -652,9 +679,29 @@ class Main:
 
             return {"countries": uniq}
 
-        # -------------------------------------------------
-        # Scatter figure + highlight selected
-        # -------------------------------------------------
+        # ALSO clear PCP constraints when scatter resets (so map/leaderboard fully return)
+        @self.app.callback(
+            Output("pcp-brush-store", "data", allow_duplicate=True),
+            Input("score-attr-scatter", "relayoutData"),
+            prevent_initial_call=True,
+        )
+        def clear_pcp_on_scatter_reset(relayoutData):
+            if not isinstance(relayoutData, dict):
+                raise PreventUpdate
+
+            # ignore resize noise
+            if relayoutData.get("autosize") is True or "width" in relayoutData or "height" in relayoutData:
+                raise PreventUpdate
+
+            if relayoutData.get("xaxis.autorange") is True or relayoutData.get("yaxis.autorange") is True:
+                return {"constraints": {}}
+
+            if relayoutData.get("selections") == [] or relayoutData.get("selections") is None:
+                return {"constraints": {}}
+
+            raise PreventUpdate
+
+        # Scatter figure + highlight selected (and show selected in scatter when clicking map)
         @self.app.callback(
             Output("score-attr-scatter", "figure"),
             Input("filters-applied-store", "data"),
@@ -678,9 +725,7 @@ class Main:
                 except Exception:
                     return self._empty_message_fig("No data")
 
-            # IMPORTANT: do NOT filter the scatter by its own selection store.
-            # Doing so creates a loop: selection -> store -> figure update -> selection cleared.
-            # We only apply PCP constraints here (if any) so scatter can still be used to brush.
+            # apply PCP constraints only (do NOT apply scatter store here)
             if pcp_store and isinstance(pcp_store, dict) and (pcp_store.get("constraints") or {}):
                 scored_df = self._apply_intersection(scored_df, {"countries": []}, pcp_store)
 
@@ -694,31 +739,40 @@ class Main:
             y_scaled = dfp[y_col] / float(meta.get("scale", 1.0) or 1.0)
             y_title = meta["label"] + (f" ({meta['unit']})" if meta.get("unit") else "")
 
+            dfp2 = dfp.assign(_y=y_scaled).reset_index(drop=True)
+
             fig = px.scatter(
-                dfp.assign(_y=y_scaled),
+                dfp2,
                 x="RE_Opp",
                 y="_y",
                 hover_name="Country",
                 title=f"Score vs {meta['label']}",
                 color_discrete_sequence=["#38a89a"],
             )
+
             fig.update_traces(
                 marker=dict(size=7, opacity=0.65),
                 selected=dict(marker=dict(opacity=0.95, size=9)),
                 unselected=dict(marker=dict(opacity=0.18)),
             )
-            fig.update_layout(dragmode="lasso")
-            fig.update_layout(uirevision="score-attr-scatter")
 
+            fig.update_layout(dragmode="lasso", uirevision="score-attr-scatter")
+
+            # visually + programmatically select country when clicking map
             if selected_country:
-                hit = dfp[dfp["Country"].astype(str) == str(selected_country)]
-                if not hit.empty:
-                    xv = float(hit.iloc[0]["RE_Opp"])
-                    yv = float(hit.iloc[0][y_col]) / float(meta.get("scale", 1.0) or 1.0)
+                mask = dfp2["Country"].astype(str) == str(selected_country)
+                idxs = dfp2.index[mask].tolist()
+
+                # highlight as "selected" in the main trace
+                if idxs:
+                    fig.update_traces(selectedpoints=idxs)
+
+                    # also add the big marker label so it’s obvious
+                    row = dfp2.loc[idxs[0]]
                     fig.add_trace(
                         go.Scatter(
-                            x=[xv],
-                            y=[yv],
+                            x=[float(row["RE_Opp"])],
+                            y=[float(row["_y"])],
                             mode="markers+text",
                             text=[str(selected_country)],
                             textposition="top center",
@@ -750,9 +804,7 @@ class Main:
             )
             return fig
 
-        # -------------------------------------------------
-        # Drilldown: Radar + Values ONLY (PCP + cohort handled separately)
-        # -------------------------------------------------
+        # Drilldown: Radar + Values ONLY
         @self.app.callback(
             Output("drilldown-country-title", "children"),
             Output("drilldown-investor-label", "children"),
@@ -769,14 +821,8 @@ class Main:
                 if not selected_country:
                     placeholder_fig = self._empty_message_fig("Click a country on the map.")
                     values_box = [html.Div(style={"color": "#9aa4b2", "fontSize": "12px"}, children="Select a country to see exact values.")]
-                    return (
-                        "Click a country on the map",
-                        investor_label,
-                        placeholder_fig,
-                        values_box,
-                    )
+                    return ("Click a country on the map", investor_label, placeholder_fig, values_box)
 
-                # Score cohort
                 try:
                     scored_df = self._score_mode_b(scoring_df, filters_applied)
                 except Exception:
@@ -812,7 +858,6 @@ class Main:
 
                 title = f"{selected_country} — {investor_label} | Compare: {len(df_sub)}"
 
-                # ---------- RADAR ----------
                 df_sel = df_sub[df_sub["Country"].astype(str) == str(selected_country)].head(1)
                 if df_sel.empty:
                     radar_fig = self._empty_message_fig("No data for selected country.")
@@ -843,37 +888,28 @@ class Main:
                         ),
                     )
 
-                # ---------- VALUES PANEL ----------
                 sel_row = hit.iloc[0]
 
                 def _row(lbl, val):
                     return html.Div(
-                        style={
-                            "display": "flex",
-                            "justifyContent": "space-between",
-                            "gap": "12px",
-                            "padding": "6px 0px",
-                            "borderBottom": "1px solid rgba(255,255,255,0.06)",
-                        },
+                        style={"display": "flex", "justifyContent": "space-between", "gap": "12px", "padding": "6px 0px",
+                               "borderBottom": "1px solid rgba(255,255,255,0.06)"},
                         children=[
                             html.Span(lbl, style={"color": "#9aa4b2", "fontSize": "12px"}),
                             html.Span(val, style={"color": "white", "fontSize": "12px", "fontWeight": 600}),
                         ],
                     )
 
-                values_rows = []
-                values_rows.append(
+                values_rows = [
                     html.Div(
                         style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "8px"},
                         children=[
                             html.Span("EXACT VALUES", style={"color": "#9aa4b2", "fontSize": "11px", "letterSpacing": "0.14em"}),
-                            html.Span(
-                                f"Score: {float(sel_row.get('RE_Opp', 0.0)):.1f}/100",
-                                style={"color": "white", "fontSize": "12px", "fontWeight": 700},
-                            ),
+                            html.Span(f"Score: {float(sel_row.get('RE_Opp', 0.0)):.1f}/100",
+                                      style={"color": "white", "fontSize": "12px", "fontWeight": 700}),
                         ],
                     )
-                )
+                ]
                 values_rows.extend([
                     _row("GDP per Capita (USD)", self._fmt_raw_value("Real_GDP_per_Capita_USD", sel_row.get("Real_GDP_per_Capita_USD"))),
                     _row("Population", self._fmt_raw_value("Total_Population", sel_row.get("Total_Population"))),
@@ -882,9 +918,8 @@ class Main:
                     _row("Unemployment (%)", self._fmt_raw_value("Unemployment_Rate_percent", sel_row.get("Unemployment_Rate_percent"))),
                     _row("Public Debt (% of GDP)", self._fmt_raw_value("Public_Debt_percent_of_GDP", sel_row.get("Public_Debt_percent_of_GDP"))),
                 ])
-                values_box = values_rows
 
-                return title, investor_label, radar_fig, values_box
+                return title, investor_label, radar_fig, values_rows
 
             except Exception as e:
                 msg = f"Drilldown error: {type(e).__name__}: {e}"
@@ -893,10 +928,7 @@ class Main:
                 values_box = [html.Div(style={"color": "#9aa4b2", "fontSize": "12px"}, children=msg)]
                 return msg, investor_label, placeholder_fig, values_box
 
-        # -------------------------------------------------
-        # PCP figure + cohort store (driven by filters + scatter brush)
-        # Keeps PCP brushing stable by re-applying constraintrange from pcp-brush-store.
-        # -------------------------------------------------
+        # PCP figure + cohort store
         @self.app.callback(
             Output("drilldown-pcp", "figure"),
             Output("drilldown-cohort-store", "data"),
@@ -906,13 +938,11 @@ class Main:
             Input("pcp-brush-store", "data"),
         )
         def update_pcp_and_cohort(selected_country, filters_applied, scatter_store, pcp_store):
-            investor_label = self.INVESTOR_LABEL
             filters_applied = filters_applied or {}
 
             if not selected_country:
                 return self._empty_message_fig("Click a country on the map to show PCP."), None
 
-            # Score cohort
             try:
                 scored_df = self._score_mode_b(scoring_df, filters_applied)
             except Exception:
@@ -924,19 +954,16 @@ class Main:
                 msg = f"Country not found: {selected_country}"
                 return self._empty_message_fig(msg), None
 
-            # Apply scatter selection to decide the PCP cohort (do NOT apply PCP constraints here; those are shown via constraintrange)
             scatter_countries = []
             if scatter_store and isinstance(scatter_store, dict):
                 scatter_countries = scatter_store.get("countries", []) or []
             if scatter_countries:
                 cohort_df = scored_df[scored_df["Country"].astype(str).isin([str(c) for c in scatter_countries])].copy()
-                # ensure selected stays visible
                 if str(selected_country) not in cohort_df["Country"].astype(str).values:
                     cohort_df = pd.concat([hit, cohort_df], ignore_index=True).drop_duplicates(subset=["Country"])
             else:
                 cohort_df = scored_df.copy()
 
-            # Build a manageable PCP subset (top/bottom + selected) to keep it readable
             cohort_df[score_col] = self._safe_numeric_series(cohort_df.get(score_col, 0.0), default=0.0).clip(0, 100)
             cohort_df = cohort_df.sort_values(score_col, ascending=False)
             top = cohort_df.head(35)
@@ -944,6 +971,7 @@ class Main:
             sel = cohort_df[cohort_df["Country"].astype(str) == str(selected_country)]
             pcp_df = pd.concat([top, bottom, sel], ignore_index=True).drop_duplicates(subset=["Country"])
 
+            
             raw_cols = [
                 ("Real_GDP_per_Capita_USD", "GDP/cap", False),
                 ("Total_Population", "Pop", False),
@@ -952,26 +980,43 @@ class Main:
                 ("Unemployment_Rate_percent", "Unemp", True),
                 ("Public_Debt_percent_of_GDP", "Debt", True),
             ]
+            AXIS_LABEL = {
+                "GDP/cap": "Real GDP per Capita (USD)",
+                "Pop": "Total Population",
+                "Pop Growth": "Population Growth Rate (%)",
+                "Migration": "Net Migration Rate",
+                "Unemp": "Unemployment Rate (%)",
+                "Debt": "Public Debt (% of GDP)",
+            }
 
-            labels = []
+            labels =[]
             for col, lab, inv in raw_cols:
                 if col not in pcp_df.columns:
                     pcp_df[col] = np.nan
                 pcp_df[lab] = self._normalize_0_100(pcp_df, col, invert=inv)
                 labels.append(lab)
 
-            # Re-apply constraints as constraintrange so they persist even when the figure refreshes
             constraints = {}
             if pcp_store and isinstance(pcp_store, dict):
                 constraints = pcp_store.get("constraints", {}) or {}
+            AXIS_LABEL = {
+                "GDP/cap": "Real GDP per Capita (USD)",
+                "Pop": "Total Population",
+                "Pop Growth": "Population Growth Rate (%)",
+                "Migration": "Net Migration Rate",
+                "Unemp": "Unemployment Rate (%)",
+                "Debt": "Public Debt (% of GDP)",
+            }
 
             dims = []
             for lab in labels:
                 d = dict(
-                    label=lab,
-                    range=[0, 100],
-                    values=self._safe_numeric_series(pcp_df[lab], 0.0).values,
-                )
+                     label=AXIS_LABEL.get(lab, lab),
+                     range=[0, 100], 
+                     values=self._safe_numeric_series(pcp_df[lab], 0.0).values,
+                     tickvals = [0 ,20 , 40, 60 , 80, 100],
+                     ticktext = ["0" , "20", "40", "60", "80","100"],
+                     )
                 if lab in constraints:
                     d["constraintrange"] = constraints[lab]
                 dims.append(d)
@@ -991,13 +1036,16 @@ class Main:
                     tickfont=dict(color="rgba(255,255,255,0.7)", size=10),
                 )
             )
-
             pcp_fig.update_layout(
                 paper_bgcolor="rgba(0,0,0,0)",
                 plot_bgcolor="rgba(0,0,0,0)",
                 font=dict(family="Inter, sans-serif", color="white"),
-                margin=dict(l=10, r=10, t=10, b=10),
+                margin=dict(l=90, r=60, t=90, b=30),
+                
+            
             )
+            
+
 
             cohort_payload = {
                 "selected_country": str(selected_country),
@@ -1017,9 +1065,7 @@ class Main:
 
             return pcp_fig, cohort_payload
 
-        # -------------------------------------------------
-        # Store PCP brushing constraints (robust merging and axis clearing)
-        # -------------------------------------------------
+        # Store PCP brushing constraints
         @self.app.callback(
             Output("pcp-brush-store", "data", allow_duplicate=True),
             Input("drilldown-pcp", "restyleData"),
@@ -1035,7 +1081,6 @@ class Main:
             if isinstance(current_store, dict):
                 current_constraints = current_store.get("constraints", {}) or {}
 
-            # If Plotly sends nothing, do nothing (avoid random clears)
             if not restyleData:
                 raise PreventUpdate
 
@@ -1065,7 +1110,6 @@ class Main:
                     continue
                 axis_label = labels[idx]
 
-                # v == None means "clear constraint" for that axis
                 if v is None:
                     updated.pop(axis_label, None)
                 else:
@@ -1076,10 +1120,7 @@ class Main:
 
             return {"constraints": updated}
 
-        # -------------------------------------------------
         # PCP brushing -> update RADAR + VALUES ONLY
-        # (don’t update PCP here or you lose the brush)
-        # -------------------------------------------------
         @self.app.callback(
             Output("drilldown-radar", "figure", allow_duplicate=True),
             Output("drilldown-values", "children", allow_duplicate=True),
@@ -1093,46 +1134,27 @@ class Main:
 
             constraints = (brush_store or {}).get("constraints", {}) if brush_store else {}
             df = pd.DataFrame(cohort_store["records"])
-
             labels = list(cohort_store.get("labels", []))
             selected_country = str(cohort_store.get("selected_country", ""))
 
             brushed_df = self._apply_constraints(df, constraints)
-            brushed_n = len(brushed_df)
             cohort_for_median = brushed_df if constraints else df
 
             sel_hit = df[df["Country"].astype(str) == selected_country].head(1)
-
-            # Radar
             if sel_hit.empty or not labels:
                 radar_fig = self._empty_message_fig("No data.")
             else:
                 sel_vals = [float(sel_hit.iloc[0][lab]) for lab in labels]
                 med_vals = [float(np.nanmedian(self._safe_numeric_series(cohort_for_median[lab], np.nan))) for lab in labels]
-
                 theta = labels + [labels[0]]
                 r_sel = sel_vals + [sel_vals[0]]
                 r_med = med_vals + [med_vals[0]]
 
                 radar_fig = go.Figure()
-                radar_fig.add_trace(
-                    go.Scatterpolar(
-                        r=r_med,
-                        theta=theta,
-                        fill="toself",
-                        name=("Brushed median" if constraints else "Cohort median"),
-                        opacity=0.25,
-                    )
-                )
-                radar_fig.add_trace(
-                    go.Scatterpolar(
-                        r=r_sel,
-                        theta=theta,
-                        fill="toself",
-                        name=str(selected_country),
-                        opacity=0.80,
-                    )
-                )
+                radar_fig.add_trace(go.Scatterpolar(r=r_med, theta=theta, fill="toself",
+                                                    name=("Brushed median" if constraints else "Cohort median"), opacity=0.25))
+                radar_fig.add_trace(go.Scatterpolar(r=r_sel, theta=theta, fill="toself",
+                                                    name=str(selected_country), opacity=0.80))
                 radar_fig.update_layout(
                     paper_bgcolor="rgba(0,0,0,0)",
                     plot_bgcolor="rgba(0,0,0,0)",
@@ -1149,16 +1171,10 @@ class Main:
                     ),
                 )
 
-            # Values panel
             def _row(lbl, val):
                 return html.Div(
-                    style={
-                        "display": "flex",
-                        "justifyContent": "space-between",
-                        "gap": "12px",
-                        "padding": "6px 0px",
-                        "borderBottom": "1px solid rgba(255,255,255,0.06)",
-                    },
+                    style={"display": "flex", "justifyContent": "space-between", "gap": "12px", "padding": "6px 0px",
+                           "borderBottom": "1px solid rgba(255,255,255,0.06)"},
                     children=[
                         html.Span(lbl, style={"color": "#9aa4b2", "fontSize": "12px"}),
                         html.Span(val, style={"color": "white", "fontSize": "12px", "fontWeight": 600}),
@@ -1171,13 +1187,7 @@ class Main:
             sel_row = sel_hit.iloc[0]
             score = float(sel_row.get("RE_Opp", 0.0))
 
-            in_brush = True
-            if constraints:
-                in_brush = not brushed_df[brushed_df["Country"].astype(str) == selected_country].empty
-            warn = " (selected OUTSIDE brush)" if (constraints and not in_brush) else ""
-
-            values_rows = []
-            values_rows.append(
+            values_rows = [
                 html.Div(
                     style={"display": "flex", "justifyContent": "space-between", "alignItems": "center", "marginBottom": "8px"},
                     children=[
@@ -1185,13 +1195,7 @@ class Main:
                         html.Span(f"Score: {score:.1f}/100", style={"color": "white", "fontSize": "12px", "fontWeight": 700}),
                     ],
                 )
-            )
-            values_rows.append(
-                html.Div(
-                    style={"color": "rgba(255,255,255,0.75)", "fontSize": "11px", "marginBottom": "8px"},
-                    children=(f"Brushed cohort: {brushed_n}{warn}" if constraints else "Brushed cohort: (none)"),
-                )
-            )
+            ]
             values_rows.extend([
                 _row("GDP per Capita (USD)", self._fmt_raw_value("Real_GDP_per_Capita_USD", sel_row.get("Real_GDP_per_Capita_USD"))),
                 _row("Population", self._fmt_raw_value("Total_Population", sel_row.get("Total_Population"))),
@@ -1217,6 +1221,7 @@ class Main:
                 dcc.Store(id="drilldown-cohort-store", storage_type="memory"),
                 dcc.Store(id="pcp-brush-store", storage_type="memory"),
                 dcc.Store(id="scatter-brush-store", storage_type="memory"),
+                dcc.Store(id="world-map-view-store", storage_type="memory"),
 
                 self.sidebar.render(),
 
@@ -1238,3 +1243,5 @@ class Main:
 if __name__ == "__main__":
     main = Main()
     main.run()
+
+

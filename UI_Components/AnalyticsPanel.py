@@ -157,7 +157,7 @@ class AnalyticsPanel:
                                                     id="drilldown-radar",
                                                     figure=_dark_placeholder("Click a country on the map to show radar + values."),
                                                     config={"displayModeBar": False},
-                                                    style={"height": "360px"},
+                                                    style={"height": "380px"},
                                                 ),
 
                                                 # NEW: exact values panel
@@ -183,6 +183,7 @@ class AnalyticsPanel:
                                                     id="drilldown-pcp",
                                                     figure=_dark_placeholder("Click a country on the map to show PCP."),
                                                     config={"displayModeBar": False},
+                                                    style = {"height" :"240px" , "width" : "100%"},
                                                 ),
                                             ],
                                         ),
