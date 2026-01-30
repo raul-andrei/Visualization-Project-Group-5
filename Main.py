@@ -606,29 +606,42 @@ class Main:
 
         # -------------------------------------------------
         # Scatter brushing -> store selected countries
+        # Also clears brush on relayout/double-click
         # -------------------------------------------------
         @self.app.callback(
-            Output("scatter-brush-store", "data"),
+            Output("scatter-brush-store", "data", allow_duplicate=True),
             Input("score-attr-scatter", "selectedData"),
+            State("scatter-brush-store", "data"),
             prevent_initial_call=True,
         )
-        def store_scatter_brush(selectedData):
-            # Plotly/Dash will send `selectedData=None` when the figure refreshes.
-            # Do NOT clear the brush in that case (it causes flicker/reset loops).
+        def store_scatter_brush(selectedData, current_store):
+            """Persist scatter lasso/box selection in a store.
+
+            IMPORTANT:
+            - Do NOT clear the brush on figure redraws (e.g., clicking the map highlights a country and re-renders the scatter).
+              Plotly/Dash can emit transient relayout/selection events during redraw that look like a clear.
+            - We only update the store when we receive an actual selectedData payload with points.
+            - We clear ONLY when Plotly explicitly sends an empty points list.
+            """
+
+            # Ignore redraw/noise
             if selectedData is None:
                 raise PreventUpdate
-            if "points" not in selectedData:
+
+            if not isinstance(selectedData, dict) or "points" not in selectedData:
                 raise PreventUpdate
 
-            # Explicit clear (e.g., user double-clicks background) often yields empty points.
-            if not selectedData.get("points"):
+            pts = selectedData.get("points") or []
+            if len(pts) == 0:
+                # Explicit clear from Plotly
                 return {"countries": []}
+
             countries = []
-            for p in selectedData.get("points", []):
-                # px.scatter with hover_name uses hovertext
+            for p in pts:
                 c = p.get("hovertext") or p.get("text")
                 if c:
                     countries.append(str(c))
+
             # de-dup while preserving order
             seen = set()
             uniq = []
@@ -636,6 +649,7 @@ class Main:
                 if c not in seen:
                     seen.add(c)
                     uniq.append(c)
+
             return {"countries": uniq}
 
         # -------------------------------------------------
@@ -737,15 +751,13 @@ class Main:
             return fig
 
         # -------------------------------------------------
-        # Drilldown: Radar + Values + PCP + cohort store
+        # Drilldown: Radar + Values ONLY (PCP + cohort handled separately)
         # -------------------------------------------------
         @self.app.callback(
             Output("drilldown-country-title", "children"),
             Output("drilldown-investor-label", "children"),
             Output("drilldown-radar", "figure"),
             Output("drilldown-values", "children"),
-            Output("drilldown-pcp", "figure"),
-            Output("drilldown-cohort-store", "data"),
             Input("selected-country-store", "data"),
             Input("filters-applied-store", "data"),
         )
@@ -762,8 +774,6 @@ class Main:
                         investor_label,
                         placeholder_fig,
                         values_box,
-                        placeholder_fig,
-                        None,
                     )
 
                 # Score cohort
@@ -772,16 +782,13 @@ class Main:
                 except Exception:
                     scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
 
-                # Do not apply brushing stores here; this callback re-renders the PCP figure.
-                # If it runs during brushing, Plotly clears constraintrange immediately.
-
                 score_col = "RE_Opp"
                 hit = scored_df[scored_df["Country"].astype(str) == str(selected_country)]
                 if hit.empty:
                     msg = f"Country not found: {selected_country}"
                     placeholder_fig = self._empty_message_fig(msg)
                     values_box = [html.Div(style={"color": "#9aa4b2", "fontSize": "12px"}, children=msg)]
-                    return msg, investor_label, placeholder_fig, values_box, placeholder_fig, None
+                    return msg, investor_label, placeholder_fig, values_box
 
                 df_sub = self._subset_nearest(scored_df, str(selected_country), score_col, n=60).copy()
 
@@ -877,123 +884,197 @@ class Main:
                 ])
                 values_box = values_rows
 
-                # ---------- PCP ----------
-                df_sub_sorted = df_sub.sort_values(score_col, ascending=False).copy()
-                top = df_sub_sorted.head(20)
-                bottom = df_sub_sorted.tail(10)
-                sel = df_sub_sorted[df_sub_sorted["Country"].astype(str) == str(selected_country)]
-                pcp_df = pd.concat([top, bottom, sel], ignore_index=True).drop_duplicates(subset=["Country"])
-
-                dims = [
-                    dict(label=lab, range=[0, 100], values=self._safe_numeric_series(pcp_df[lab], 0.0).values)
-                    for lab in labels
-                ]
-
-                pcp_fig = go.Figure()
-
-                # base dimmed lines (rgba colorscale)
-                pcp_fig.add_trace(
-                    go.Parcoords(
-                        line=dict(
-                            color=self._safe_numeric_series(pcp_df[score_col], 0.0).values,
-                            colorscale=DIM_GREEN_SCALE,
-                            cmin=float(pcp_df[score_col].min()),
-                            cmax=float(pcp_df[score_col].max()),
-                            showscale=True,
-                        ),
-                        dimensions=dims,
-                        labelfont=dict(color="white", size=12),
-                        tickfont=dict(color="rgba(255,255,255,0.7)", size=10),
-                    )
-                )
-
-                # selected overlay (cyan)
-                df_sel2 = pcp_df[pcp_df["Country"].astype(str) == str(selected_country)]
-                if not df_sel2.empty:
-                    dims_sel = [
-                        dict(label=lab, range=[0, 100], values=self._safe_numeric_series(df_sel2[lab], 0.0).values)
-                        for lab in labels
-                    ]
-                    pcp_fig.add_trace(
-                        go.Parcoords(
-                            line=dict(
-                                color=[1.0] * len(df_sel2),
-                                colorscale=[[0, "rgba(102,252,241,1.0)"], [1, "rgba(102,252,241,1.0)"]],
-                                cmin=0.0,
-                                cmax=1.0,
-                                showscale=False,
-                            ),
-                            dimensions=dims_sel,
-                            labelfont=dict(color="white", size=12),
-                            tickfont=dict(color="rgba(255,255,255,0.85)", size=10),
-                        )
-                    )
-
-                pcp_fig.update_layout(
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(0,0,0,0)",
-                    font=dict(family="Inter, sans-serif", color="white"),
-                    margin=dict(l=10, r=10, t=10, b=10),
-                )
-
-                cohort_payload = {
-                    "selected_country": str(selected_country),
-                    "score_col": "RE_Opp",
-                    "labels": labels,
-                    "records": df_sub[
-                        ["Country", "RE_Opp"] + labels + [
-                            "Real_GDP_per_Capita_USD",
-                            "Total_Population",
-                            "Population_Growth_Rate",
-                            "Net_Migration_Rate",
-                            "Unemployment_Rate_percent",
-                            "Public_Debt_percent_of_GDP",
-                        ]
-                    ].to_dict("records"),
-                }
-
-                return title, investor_label, radar_fig, values_box, pcp_fig, cohort_payload
+                return title, investor_label, radar_fig, values_box
 
             except Exception as e:
                 msg = f"Drilldown error: {type(e).__name__}: {e}"
                 investor_label = self.INVESTOR_LABEL
                 placeholder_fig = self._empty_message_fig(msg)
                 values_box = [html.Div(style={"color": "#9aa4b2", "fontSize": "12px"}, children=msg)]
-                return msg, investor_label, placeholder_fig, values_box, placeholder_fig, None
+                return msg, investor_label, placeholder_fig, values_box
 
         # -------------------------------------------------
-        # Store PCP brushing constraints
+        # PCP figure + cohort store (driven by filters + scatter brush)
+        # Keeps PCP brushing stable by re-applying constraintrange from pcp-brush-store.
         # -------------------------------------------------
         @self.app.callback(
-            Output("pcp-brush-store", "data"),
+            Output("drilldown-pcp", "figure"),
+            Output("drilldown-cohort-store", "data"),
+            Input("selected-country-store", "data"),
+            Input("filters-applied-store", "data"),
+            Input("scatter-brush-store", "data"),
+            Input("pcp-brush-store", "data"),
+        )
+        def update_pcp_and_cohort(selected_country, filters_applied, scatter_store, pcp_store):
+            investor_label = self.INVESTOR_LABEL
+            filters_applied = filters_applied or {}
+
+            if not selected_country:
+                return self._empty_message_fig("Click a country on the map to show PCP."), None
+
+            # Score cohort
+            try:
+                scored_df = self._score_mode_b(scoring_df, filters_applied)
+            except Exception:
+                scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
+
+            score_col = "RE_Opp"
+            hit = scored_df[scored_df["Country"].astype(str) == str(selected_country)]
+            if hit.empty:
+                msg = f"Country not found: {selected_country}"
+                return self._empty_message_fig(msg), None
+
+            # Apply scatter selection to decide the PCP cohort (do NOT apply PCP constraints here; those are shown via constraintrange)
+            scatter_countries = []
+            if scatter_store and isinstance(scatter_store, dict):
+                scatter_countries = scatter_store.get("countries", []) or []
+            if scatter_countries:
+                cohort_df = scored_df[scored_df["Country"].astype(str).isin([str(c) for c in scatter_countries])].copy()
+                # ensure selected stays visible
+                if str(selected_country) not in cohort_df["Country"].astype(str).values:
+                    cohort_df = pd.concat([hit, cohort_df], ignore_index=True).drop_duplicates(subset=["Country"])
+            else:
+                cohort_df = scored_df.copy()
+
+            # Build a manageable PCP subset (top/bottom + selected) to keep it readable
+            cohort_df[score_col] = self._safe_numeric_series(cohort_df.get(score_col, 0.0), default=0.0).clip(0, 100)
+            cohort_df = cohort_df.sort_values(score_col, ascending=False)
+            top = cohort_df.head(35)
+            bottom = cohort_df.tail(15)
+            sel = cohort_df[cohort_df["Country"].astype(str) == str(selected_country)]
+            pcp_df = pd.concat([top, bottom, sel], ignore_index=True).drop_duplicates(subset=["Country"])
+
+            raw_cols = [
+                ("Real_GDP_per_Capita_USD", "GDP/cap", False),
+                ("Total_Population", "Pop", False),
+                ("Population_Growth_Rate", "Pop Growth", False),
+                ("Net_Migration_Rate", "Migration", False),
+                ("Unemployment_Rate_percent", "Unemp", True),
+                ("Public_Debt_percent_of_GDP", "Debt", True),
+            ]
+
+            labels = []
+            for col, lab, inv in raw_cols:
+                if col not in pcp_df.columns:
+                    pcp_df[col] = np.nan
+                pcp_df[lab] = self._normalize_0_100(pcp_df, col, invert=inv)
+                labels.append(lab)
+
+            # Re-apply constraints as constraintrange so they persist even when the figure refreshes
+            constraints = {}
+            if pcp_store and isinstance(pcp_store, dict):
+                constraints = pcp_store.get("constraints", {}) or {}
+
+            dims = []
+            for lab in labels:
+                d = dict(
+                    label=lab,
+                    range=[0, 100],
+                    values=self._safe_numeric_series(pcp_df[lab], 0.0).values,
+                )
+                if lab in constraints:
+                    d["constraintrange"] = constraints[lab]
+                dims.append(d)
+
+            pcp_fig = go.Figure()
+            pcp_fig.add_trace(
+                go.Parcoords(
+                    line=dict(
+                        color=self._safe_numeric_series(pcp_df[score_col], 0.0).values,
+                        colorscale=DIM_GREEN_SCALE,
+                        cmin=float(pcp_df[score_col].min()),
+                        cmax=float(pcp_df[score_col].max()),
+                        showscale=True,
+                    ),
+                    dimensions=dims,
+                    labelfont=dict(color="white", size=12),
+                    tickfont=dict(color="rgba(255,255,255,0.7)", size=10),
+                )
+            )
+
+            pcp_fig.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font=dict(family="Inter, sans-serif", color="white"),
+                margin=dict(l=10, r=10, t=10, b=10),
+            )
+
+            cohort_payload = {
+                "selected_country": str(selected_country),
+                "score_col": "RE_Opp",
+                "labels": labels,
+                "records": pcp_df[
+                    ["Country", "RE_Opp"] + labels + [
+                        "Real_GDP_per_Capita_USD",
+                        "Total_Population",
+                        "Population_Growth_Rate",
+                        "Net_Migration_Rate",
+                        "Unemployment_Rate_percent",
+                        "Public_Debt_percent_of_GDP",
+                    ]
+                ].to_dict("records"),
+            }
+
+            return pcp_fig, cohort_payload
+
+        # -------------------------------------------------
+        # Store PCP brushing constraints (robust merging and axis clearing)
+        # -------------------------------------------------
+        @self.app.callback(
+            Output("pcp-brush-store", "data", allow_duplicate=True),
             Input("drilldown-pcp", "restyleData"),
             State("drilldown-cohort-store", "data"),
+            State("pcp-brush-store", "data"),
             prevent_initial_call=True,
         )
-        def store_pcp_brush(restyleData, cohort_store):
+        def store_pcp_brush(restyleData, cohort_store, current_store):
             if not cohort_store or "records" not in cohort_store:
                 raise PreventUpdate
 
-            if not restyleData or not isinstance(restyleData, (list, tuple)) or len(restyleData) == 0:
-                return {"constraints": {}}
+            current_constraints = {}
+            if isinstance(current_store, dict):
+                current_constraints = current_store.get("constraints", {}) or {}
 
-            patch = restyleData[0] if isinstance(restyleData[0], dict) else {}
+            # If Plotly sends nothing, do nothing (avoid random clears)
+            if not restyleData:
+                raise PreventUpdate
+
+            patch = {}
+            if isinstance(restyleData, (list, tuple)) and len(restyleData) >= 1 and isinstance(restyleData[0], dict):
+                patch = restyleData[0]
+            elif isinstance(restyleData, dict):
+                patch = restyleData
+
             labels = cohort_store.get("labels", [])
+            if not labels:
+                raise PreventUpdate
 
-            constraints = {}
+            updated = dict(current_constraints)
+            saw_any = False
+
             for k, v in patch.items():
                 k = str(k)
                 if "constraintrange" not in k:
                     continue
+                saw_any = True
                 try:
                     idx = int(k.split("dimensions[")[1].split("]")[0])
                 except Exception:
                     continue
                 if idx < 0 or idx >= len(labels):
                     continue
-                constraints[labels[idx]] = v
+                axis_label = labels[idx]
 
-            return {"constraints": constraints}
+                # v == None means "clear constraint" for that axis
+                if v is None:
+                    updated.pop(axis_label, None)
+                else:
+                    updated[axis_label] = v
+
+            if not saw_any:
+                raise PreventUpdate
+
+            return {"constraints": updated}
 
         # -------------------------------------------------
         # PCP brushing -> update RADAR + VALUES ONLY
