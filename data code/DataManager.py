@@ -10,12 +10,16 @@ MISSING_MARKERS = ["", " ", "-", "NA", "N/A", "n/a", "na", "NaN"]
 
 
 def standardize_missing(df: pd.DataFrame) -> pd.DataFrame:
-    """Replace common missing markers with proper NaN."""
+    """Replace common missing markers with proper NaN values."""
     return df.replace(MISSING_MARKERS, pd.NA)
 
 
 def drop_bad_rows(df: pd.DataFrame, key_col: str = "Country") -> pd.DataFrame:
-    """Drop rows without Country and rows where all non-key columns are NaN."""
+    """Remove rows that can't be used.
+
+    - Drops rows without a Country name.
+    - Drops rows where all other columns are missing.
+    """    
     if key_col in df.columns:
         before = len(df)
         df = df.dropna(subset=[key_col])
@@ -66,7 +70,7 @@ def convert_numeric_columns(df: pd.DataFrame, numeric_cols: list) -> pd.DataFram
     return df
 
 
-# ================== CLEANERS PER FILE ================== #
+#CLEANERS PER FILE#
 
 def clean_communications():
     filename = "communications_data.csv"
@@ -213,7 +217,7 @@ def clean_geography():
 
     # NOTE: Area/length columns (e.g. "652,230 sq km", "14.2 million sq km")
     # are left as strings for now because they contain units and different scales.
-    # If you want, we can later add logic to parse them into pure numeric km²/km.
+    # We can parse them later if needed.
 
     df = drop_bad_rows(df, key_col="Country")
 

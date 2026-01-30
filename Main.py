@@ -18,14 +18,10 @@ import numpy as np
 import pandas as pd
 
 
-# -----------------------------
 # Data
-# -----------------------------
 scoring_df = load_and_process_data()
 
-# -----------------------------
 # Styling
-# -----------------------------
 GREEN_SCALE = [
     [0.00, "#0b1311"],
     [0.10, "#10231f"],
@@ -87,7 +83,7 @@ class Main:
 
         self.register_callbacks()
 
-    # ---------- Utils ----------
+    # Utils 
     def _empty_world_figure(self):
         fig = go.Figure(go.Scattergeo())
         fig.update_layout(
@@ -182,7 +178,7 @@ class Main:
             .fillna(default)
         )
 
-    # ---------- Filtering + Mode-B scoring ----------
+    # Filtering + Mode-B scoring 
     def _filters_from_ranges(self, values_list, ids_list):
         if not values_list or not ids_list:
             return {}
@@ -212,7 +208,7 @@ class Main:
             if lo_f > hi_f:
                 lo_f, hi_f = hi_f, lo_f
 
-            # slider units -> raw units
+            # slider units to raw units
             if col == "Total_Population":
                 lo_f *= 1_000_000.0
                 hi_f *= 1_000_000.0
@@ -301,7 +297,7 @@ class Main:
             return f"{xf:.2f}"
         return f"{xf:.2f}"
 
-    # ---------- Helper: apply PCP constraints ----------
+    # Helper: apply PCP constraints 
     def _apply_constraints(self, df: pd.DataFrame, constraints: dict) -> pd.DataFrame:
         if not constraints:
             return df
@@ -355,7 +351,7 @@ class Main:
 
         return df
 
-    # ---------- Callbacks ----------
+    # Callbacks 
     def register_callbacks(self):
 
         # Sidebar collapse state
@@ -641,10 +637,8 @@ class Main:
             def _is_reset_signal(r):
                 if not isinstance(r, dict):
                     return False
-                # Most reliable: autorange on either axis
                 if r.get("xaxis.autorange") is True or r.get("yaxis.autorange") is True:
                     return True
-                # Some versions: selection cleared via selections=[]
                 if r.get("selections") == [] or r.get("selections") is None:
                     return True
                 return False
@@ -725,7 +719,7 @@ class Main:
                 except Exception:
                     return self._empty_message_fig("No data")
 
-            # apply PCP constraints only (do NOT apply scatter store here)
+            # apply PCP constraints only 
             if pcp_store and isinstance(pcp_store, dict) and (pcp_store.get("constraints") or {}):
                 scored_df = self._apply_intersection(scored_df, {"countries": []}, pcp_store)
 
@@ -767,7 +761,7 @@ class Main:
                 if idxs:
                     fig.update_traces(selectedpoints=idxs)
 
-                    # also add the big marker label so it’s obvious
+                    # also add the big marker label 
                     row = dfp2.loc[idxs[0]]
                     fig.add_trace(
                         go.Scatter(
@@ -1120,7 +1114,7 @@ class Main:
 
             return {"constraints": updated}
 
-        # PCP brushing -> update RADAR + VALUES ONLY
+        # PCP brushing 
         @self.app.callback(
             Output("drilldown-radar", "figure", allow_duplicate=True),
             Output("drilldown-values", "children", allow_duplicate=True),
@@ -1207,7 +1201,7 @@ class Main:
 
             return radar_fig, values_rows
 
-    # ---------- Layout ----------
+    # Layout 
     def setup_layout(self):
         return html.Div(
             className="app-container",

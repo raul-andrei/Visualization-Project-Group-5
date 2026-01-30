@@ -152,7 +152,7 @@ class AnalyticsPanel:
                                         dcc.Loading(
                                             type="default",
                                             children=[
-                                                # NEW: Radar
+                                                #Radar
                                                 dcc.Graph(
                                                     id="drilldown-radar",
                                                     figure=_dark_placeholder("Click a country on the map to show radar + values."),
@@ -160,7 +160,7 @@ class AnalyticsPanel:
                                                     style={"height": "380px"},
                                                 ),
 
-                                                # NEW: exact values panel
+                                                #exact values panel
                                                 html.Div(
                                                     id="drilldown-values",
                                                     style={
@@ -178,7 +178,7 @@ class AnalyticsPanel:
                                                     ],
                                                 ),
 
-                                                # Keep PCP (optional but useful)
+                                                
                                                 dcc.Graph(
                                                     id="drilldown-pcp",
                                                     figure=_dark_placeholder("Click a country on the map to show PCP."),

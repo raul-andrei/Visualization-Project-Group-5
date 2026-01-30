@@ -78,9 +78,7 @@ class Sidebar:
             ],
         )
 
-    # -------------------------
     # Top + Navigation
-    # -------------------------
     def render_topbar(self):
         """Top bar: collapse/expand button + app branding (branding hidden in collapsed mode via CSS)."""
         return html.Div(
@@ -102,9 +100,7 @@ class Sidebar:
             ],
         )
 
-    # -------------------------
     # Panel area (expanded content)
-    # -------------------------
     def render_panel_area(self):
         """Container for the active panel. Which panel is visible will be controlled via callbacks/CSS."""
         return html.Div(

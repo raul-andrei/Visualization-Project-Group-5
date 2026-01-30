@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
+# Columns used in the Real Estate view (these are the ones we compute min/max for).
 REAL_ESTATE_VARS = [
     {"col": "Real_GDP_per_Capita_USD", "label": "GDP per Capita (USD)", "dir": +1},
     {"col": "Total_Population", "label": "Population", "dir": +1},
@@ -17,12 +18,15 @@ REAL_ESTATE_VARS = [
     {"col": "Public_Debt_percent_of_GDP", "label": "Public Debt (% of GDP)", "dir": -1},
 ]
 
+# Matches the first number we can find in a messy string (e.g., "652,230 sq km" -> 652,230).
 _NUM_TOKEN = re.compile(r"-?\d+(?:\.\d+)?")
 
 def _to_decimal(val) -> Decimal | None:
-    """
-    Parse messy numeric cells like '652,230 sq km', '12%', '', NaN, etc.
-    Returns Decimal for safe formatting (no scientific notation).
+    """Extract a number from a messy cell and return it as a Decimal.
+
+    This helps with two things:
+    - reading values like "652,230 sq km" or "12%"
+    - avoiding scientific notation when we print/save results
     """
     if val is None:
         return None
@@ -67,11 +71,9 @@ def _decimal_to_plain_str(d: Decimal, max_decimals: int = 12) -> str:
     Convert Decimal to a plain (non-scientific) string.
     Trims trailing zeros and dot.
     """
-    # quantize-ish without forcing fixed decimals:
     s = format(d, "f")  # never 'e'
     if "." in s:
         s = s.rstrip("0").rstrip(".")
-    # optional: keep it from being overly long
     if "." in s:
         whole, frac = s.split(".", 1)
         frac = frac[:max_decimals].rstrip("0")
@@ -80,6 +82,11 @@ def _decimal_to_plain_str(d: Decimal, max_decimals: int = 12) -> str:
 
 
 def compute_min_max(df: pd.DataFrame, variables=REAL_ESTATE_VARS) -> pd.DataFrame:
+    """Compute min and max for each selected column, even if the column contains messy strings.
+
+    Returns a small table with: col, label, dir, min, max, and a note if a column is missing.
+    Min/max values are stored as plain strings (so they don't show up as scientific notation).
+    """
     rows = []
     for v in variables:
         col = v["col"]

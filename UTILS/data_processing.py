@@ -7,13 +7,10 @@ import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
 
-# -----------------------------
-# Configuration
-# -----------------------------
+# Rows that aren't actual countries (we don't want them on the map).
 IGNORE_ENTITIES = ["WORLD", "EUROPEAN UNION", "ANTARCTICA"]
 
-# Columns we want numeric-cleaned if present (otherwise create them as 0)
-# (For now: only the 6 Real Estate inputs)
+# Columns we use in the Real Estate filters.
 TARGET_COLS: List[str] = [
     "Real_GDP_per_Capita_USD",
     "Total_Population",
@@ -24,11 +21,10 @@ TARGET_COLS: List[str] = [
 ]
 
 
-# -----------------------------
 # Helpers: parsing + cleaning
-# -----------------------------
+
 def clean_numeric(x) -> float:
-    """Parse messy numeric strings such as '$1.2 billion', '10,000 sq km', '-', 'na'."""
+    """Turn messy numeric values into a float. Ex: '$1.2 billion', '10,000 sq km', '-', 'na'."""
     if pd.isna(x):
         return 0.0
     if isinstance(x, (int, float, np.integer, np.floating)):
@@ -59,8 +55,7 @@ def clean_numeric(x) -> float:
 
 
 def fix_billions(x: float) -> float:
-    """If exports/imports were accidentally parsed as absolute USD, convert to billions (heuristic)."""
-    # If value looks like a big absolute number, turn into billions.
+    """Convert very large raw USD values into 'billions USD' if needed."""
     if x > 10000:
         return x / 1_000_000_000.0
     return x
@@ -73,7 +68,7 @@ def filter_non_countries(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def ensure_numeric_columns(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
-    """Ensure columns exist and are numeric-cleaned."""
+    """Make sure each column exists and contains numbers (missing columns become 0)."""
     for col in cols:
         if col in df.columns:
             df[col] = df[col].apply(clean_numeric)
@@ -83,18 +78,15 @@ def ensure_numeric_columns(df: pd.DataFrame, cols: List[str]) -> pd.DataFrame:
 
 
 def apply_unit_fixes(df: pd.DataFrame) -> pd.DataFrame:
+    """Fix known unit issues for specific columns if they exist."""
     for c in ["Exports_billion_USD", "Imports_billion_USD"]:
         if c in df.columns:
             df[c] = df[c].apply(fix_billions)
     return df
 
-# -----------------------------
-# Feature engineering
-# -----------------------------
 
-# -----------------------------
-# Real Estate: feature functions (no final scoring)
-# -----------------------------
+# Feature engineering
+
 
 def _scaler_0_100() -> MinMaxScaler:
     return MinMaxScaler(feature_range=(0, 100))
@@ -104,10 +96,10 @@ def compute_wealth_score(
     df: pd.DataFrame,
     fit_df: Optional[pd.DataFrame] = None,
 ) -> pd.Series:
-    """Wealth proxy for RE: min-max scaled log10(GDP/capita).
+    """Wealth score (0-100) based on GDP per capita (log-scaled).
 
     - Uses only Real_GDP_per_Capita_USD.
-    - If fit_df is provided, the scaler is fit on fit_df (global baseline) but applied to df.
+    - If fit_df is given, the scaling is based on fit_df, then applied to df.
     """
     if fit_df is None:
         fit_df = df
@@ -153,7 +145,7 @@ def compute_re_demand_features(
     fit_df: Optional[pd.DataFrame] = None,
     rel_growth_clip_max: float = 3.0,
 ) -> dict[str, pd.Series]:
-    """Demand-side RE features.
+    """Compute demand-related indicators for real estate and return them as separate columns.
 
     Creates:
       - Pop_Growth_Abs: (Population * PopGrowthRate / 100), clipped at >=0
@@ -168,7 +160,7 @@ def compute_re_demand_features(
     if fit_df is None:
         fit_df = df
 
-    # Absolute population growth
+    # Absolute population growth (people per year, approx.)
     pop_growth_abs_fit = (fit_df["Total_Population"] * fit_df["Population_Growth_Rate"] / 100.0).clip(lower=0)
     pop_growth_abs = (df["Total_Population"] * df["Population_Growth_Rate"] / 100.0).clip(lower=0)
 
@@ -176,7 +168,7 @@ def compute_re_demand_features(
     abs_scaler.fit(pop_growth_abs_fit.to_frame())
     abs_score = abs_scaler.transform(pop_growth_abs.to_frame()).flatten()
 
-    # Relative growth mapped directly to 0..100
+    # Relative growth mapped directly to 0-100
     rel_growth = (df["Population_Growth_Rate"].clip(lower=0, upper=rel_growth_clip_max) / rel_growth_clip_max) * 100.0
 
     # Migration score (scaled)
@@ -224,19 +216,13 @@ def derive_common_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 
-# -----------------------------
 # Main entrypoint
-# -----------------------------
 def load_and_process_data() -> pd.DataFrame:
     """Load + clean + derive common features. Persona scoring will be computed interactively in Dash."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.abspath(os.path.join(script_dir, ".."))
-    file_path = os.path.join(
-    project_root,
-    "data_curated",
-    "investor_views",
-    "real_estate_view.csv",
-)
+    file_path = os.path.join(project_root, "data_curated", "investor_views","real_estate_view.csv")
+
     print(f"Loading data from: {file_path}")
     if not os.path.exists(file_path):
         print("CRITICAL ERROR: Data file not found.")

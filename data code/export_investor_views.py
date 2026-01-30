@@ -6,6 +6,7 @@ OUTPUT_FOLDER = "data_curated/investor_views"
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 def main():
+    """Create and export one CSV per investor type from the master dataset."""
     df_master = load_master()
     print("Master shape:", df_master.shape)
 

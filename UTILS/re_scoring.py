@@ -14,22 +14,24 @@ from sklearn.preprocessing import MinMaxScaler
 
 
 def _as_numeric(s: pd.Series) -> pd.Series:
-    """Coerce to float, remove inf, keep NaN for proper imputation later."""
+    """Convert a column to numbers (invalid values become NaN).
+    We keep NaN so we can fill missing values in a controlled way later.
+    """
     out = pd.to_numeric(s, errors="coerce").astype(float)
     return out.replace([np.inf, -np.inf], np.nan)
 
 
 def _fill_with_ref_median(x: pd.Series, ref: pd.Series) -> pd.Series:
-    """Fill NaN using the median of a reference series."""
+    """Fill missing values using the median from a reference dataset.
+    This is usually more realistic than filling with 0.
+    """
     med = float(np.nanmedian(ref.to_numpy(dtype=float)))
     if np.isnan(med):
         med = 0.0
     return x.fillna(med)
 
 
-# -----------------------------
 # Real Estate baseline algorithm
-# -----------------------------
 
 def compute_real_estate_scores(
     df: pd.DataFrame,
@@ -39,9 +41,15 @@ def compute_real_estate_scores(
     missing_penalty_enabled: bool = True,
     missing_penalty_max: float = 15.0,
 ) -> pd.DataFrame:
-    """Compute Real Estate Opportunity scores (0–100).
+    """Compute Real Estate Opportunity scores (0-100) for each country.
 
-    Inputs (required columns):
+    What it does:
+    1) Cleans the 6 input columns and fills missing values using medians.
+    2) Builds 4 main components (wealth, demand, stability, market size) as 0-100 scores.
+    3) Applies penalties (microstate + optional missing-data penalty).
+    4) Combines everything into the final score: RE_Opp (clipped to 0-100).
+
+    Inputs needed (columns):
     - Real_GDP_per_Capita_USD
     - Total_Population
     - Population_Growth_Rate
@@ -49,22 +57,15 @@ def compute_real_estate_scores(
     - Unemployment_Rate_percent
     - Public_Debt_percent_of_GDP
 
-    Parameters
-    - df: dataframe to score
-    - fit_df: optional reference dataframe for MinMax fitting
-              (use full dataset for global baseline)
-    - keep_intermediate: if False, only RE_Opp is kept
-    - missing_penalty_enabled: whether to apply missing data penalty
-    - missing_penalty_max: max penalty to apply for missing data
-
-    Returns
-    - DataFrame with RE_Opp and (optionally) intermediate components
+    fit_df:
+    - If provided, scaling to 0-100 is based on fit_df (usually the full dataset),
+      then applied to df.
     """
 
     base = df.copy()
     ref = base if fit_df is None else fit_df
 
-    # --- Numeric cleaning (keep NaN so we can impute sensibly) ---
+    # These are the 6 raw inputs used by the model.
     cols = [
         "Real_GDP_per_Capita_USD",
         "Total_Population",
@@ -73,7 +74,8 @@ def compute_real_estate_scores(
         "Unemployment_Rate_percent",
         "Public_Debt_percent_of_GDP",
     ]
-
+   
+    # Convert to numeric but keep NaN (so we can track missingness properly).
     for c in cols:
         if c not in base.columns:
             base[c] = np.nan
@@ -82,10 +84,7 @@ def compute_real_estate_scores(
         base[c] = _as_numeric(base[c])
         ref[c] = _as_numeric(ref[c])
 
-    # --- Plausibility guard: GDP per capita ---
-    # Values below 1000 USD are implausible for sovereign economies and usually indicate
-    # parsing errors (e.g. commas, units) or placeholder values.
-    # Treat them as missing so they are median-imputed and penalized via data-quality logic.
+    # Treat extremely low GDP/capita values as missing (often caused by parsing/unit issues).
     base.loc[base["Real_GDP_per_Capita_USD"] < 1000, "Real_GDP_per_Capita_USD"] = np.nan
     ref.loc[ref["Real_GDP_per_Capita_USD"] < 1000, "Real_GDP_per_Capita_USD"] = np.nan
 
@@ -99,7 +98,7 @@ def compute_real_estate_scores(
 
     scaler = MinMaxScaler(feature_range=(0, 100))
 
-    # --- Wealth ---
+    # Wealth: log(GDP per capita) scaled to 0-100.
     base["Wealth_Log"] = np.log10(base["Real_GDP_per_Capita_USD"].clip(lower=1000))
     wealth_log_ref = np.log10(ref["Real_GDP_per_Capita_USD"].clip(lower=1000))
     base["Wealth_Score"] = scaler.fit(
@@ -108,7 +107,7 @@ def compute_real_estate_scores(
         base["Wealth_Log"].to_numpy().reshape(-1, 1)
     ).flatten()
 
-    # --- Demand ---
+    # Demand: mix of absolute population growth, migration, and growth rate.
     base["Pop_Growth_Abs"] = (
         base["Total_Population"] * base["Population_Growth_Rate"] / 100.0
     ).clip(lower=0)
@@ -133,21 +132,22 @@ def compute_real_estate_scores(
     ).transform(
         base["Net_Migration_Rate"].to_numpy().reshape(-1, 1)
     ).flatten()
-
+    
+    # One combined demand score (weights reflect how important each part is).
     base["Demand_Score"] = (
         0.5 * base["Abs_Demand_Score"]
         + 0.3 * base["Migration_Score"]
         + 0.2 * base["Rel_Growth_Score"]
     )
 
-    # --- Stability ---
+    # Stability: lower unemployment + lower debt => higher score.
     risk_factor = (
         0.5 * (base["Unemployment_Rate_percent"].clip(0, 25) / 25.0)
         + 0.5 * (base["Public_Debt_percent_of_GDP"].clip(0, 150) / 150.0)
     )
     base["Stability_Score"] = 100.0 * (1.0 - risk_factor)
 
-    # --- Market size ---
+    # Market size: log(Population * GDP per capita) scaled to 0–100.
     base["RE_Market_Raw"] = np.log10(
         (base["Total_Population"] * base["Real_GDP_per_Capita_USD"]).clip(lower=1)
     )
@@ -162,16 +162,15 @@ def compute_real_estate_scores(
         base["RE_Market_Raw"].to_numpy().reshape(-1, 1)
     ).flatten()
 
-    # --- Microstate penalty ---
+    # Microstate penalty: very small countries get a small negative adjustment.
     base["RE_Micro_Penalty"] = np.where(
         base["Total_Population"] < 1_000_000,
         -15,
         np.where(base["Total_Population"] < 5_000_000, -7, 0),
     )
 
-    # --- Data quality penalty ---
-    # Countries with many missing inputs (often replaced by 0 upstream) can look artificially strong/weak.
-    # Penalize missingness in the ORIGINAL df columns for transparency.
+    # Missing-data penalty: if a country is missing many inputs, reduce its score slightly.
+    # This is based on the ORIGINAL df values (before we filled missing values).
     if missing_penalty_enabled:
         orig = df.reindex(columns=cols)
         missing_cnt = orig.isna().sum(axis=1).astype(float)
@@ -181,7 +180,7 @@ def compute_real_estate_scores(
         base["RE_Missing_Count"] = 0.0
         base["RE_DataQuality_Penalty"] = 0.0
 
-    # --- Final score ---
+    # Final score: weighted mix of the 4 main components + penalties.
     re_base = (
         0.30 * base["Wealth_Score"]
         + 0.25 * base["Stability_Score"]
@@ -228,12 +227,14 @@ def filter_and_score_real_estate_cohort(
     missing_penalty_enabled: bool = True,
     missing_penalty_max: float = 15.0,
 ) -> pd.DataFrame:
-    """Filter a cohort by any of the 6 RE inputs and recompute RE scores within that cohort (Mode B).
+    """Filter countries by user ranges and then recompute scores inside that filtered set.
 
     Behavior:
-    1) Applies optional [min,max] bounds on each of the 6 raw input columns.
-    2) Applies a missingness filter based on the ORIGINAL (unimputed) values of those 6 columns.
-    3) Recomputes RE_Opp where all MinMaxScaler fits are performed on the cohort itself (fit_df=cohort).
+    1) Applies optional min/max bounds on each of the 6 raw input columns.
+    2) Removes countries with too many missing inputs (based on the original values).
+    3) Recomputes RE_Opp where the 0-100 scaling is fit on the cohort itself (not the full world).
+       This makes the results more "relative" to the countries currently visible.
+
 
     Returns the scored cohort dataframe. If the cohort is too small (<2 rows), returns an empty/NaN-scored frame.
     """
@@ -256,10 +257,11 @@ def filter_and_score_real_estate_cohort(
             cohort[c] = np.nan
         cohort[c] = _as_numeric(cohort[c])
 
-    # Build bounds mask
+    # Mask starts as "keep everything", then gets narrowed by each bound.
     mask = pd.Series(True, index=cohort.index)
 
     def _apply_bounds(col: str, lo: Optional[float], hi: Optional[float]) -> None:
+        """Update the mask based on optional lower/upper bounds for one column."""
         nonlocal mask
         if lo is not None:
             mask &= cohort[col] >= lo
@@ -275,18 +277,18 @@ def filter_and_score_real_estate_cohort(
 
     cohort = cohort.loc[mask].copy()
 
-    # Missingness filter (based on original/unimputed values)
+    # Filter out countries with too many missing values (using original/unfilled values).
     missing_cnt = cohort.reindex(columns=cols).isna().sum(axis=1)
     cohort = cohort.loc[missing_cnt <= max_missing].copy()
 
-    # If cohort too small, avoid meaningless MinMax scaling
+    # If cohort too small, avoid meaningless 0–100 scaling.
     if len(cohort) < 2:
         # Return the cohort (possibly empty) with a placeholder RE_Opp
         if "RE_Opp" not in cohort.columns:
             cohort["RE_Opp"] = np.nan
         return cohort
 
-    # Recompute scores within cohort (Mode B)
+    # Recompute scores inside the cohort (scaling fit on the cohort itself).
     scored = compute_real_estate_scores(
         cohort,
         fit_df=cohort,
@@ -298,10 +300,10 @@ def filter_and_score_real_estate_cohort(
     return scored
 
 
-# --- Minimal Sanity Check Block ---
+#Minimal Sanity Check Block
 if __name__ == "__main__":
     try:
-        # Ensure project root is on sys.path so `import scoring` works when running this file directly
+        # Ensure project root is on sys.path so 'import scoring' works when running this file directly
         import sys
         from pathlib import Path
 
@@ -315,11 +317,11 @@ if __name__ == "__main__":
 
         df_re = compute_real_estate_scores(
             df,
-            fit_df=df,            # global baseline
+            fit_df=df,            # global baseline for scaling
             keep_intermediate=False
         )
 
-        # --- Option C: Pre-ranking filter (population + data quality) ---
+        # Example pre-filter: remove very small-population countries and keep good data quality.
         ranking_df = df_re[
             (df["Total_Population"] >= 500_000) &
             (df_re["RE_Missing_Count"] <= 1)
@@ -329,10 +331,9 @@ if __name__ == "__main__":
         print(ranking_df.sort_values("RE_Opp", ascending=False)[["Country", "RE_Opp"]].head(10))
         print(ranking_df.sort_values("RE_Opp", ascending=True)[["Country", "RE_Opp"]].head(10))
 
-        # --- Option B: Filter + recompute cohort scores ---
+        # Example cohort: apply bounds and recompute scores inside that cohort.
         cohort_scored = filter_and_score_real_estate_cohort(
             df,
-            # Example cohort: user-defined bounds across the 6 inputs
             gdp_per_capita_min= None,
             gdp_per_capita_max=None,
             population_min=18_000_000,

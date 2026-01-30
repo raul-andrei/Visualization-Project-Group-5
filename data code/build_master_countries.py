@@ -2,11 +2,15 @@ import os
 from functools import reduce
 import pandas as pd
 
-INPUT_FOLDER = "data_curated"   # we use the CLEAN files now
+# Folder where the cleaned category CSVs are stored.
+INPUT_FOLDER = "data_curated"  
+
+# Final merged dataset (used by the app).
 MASTER_OUTPUT = os.path.join(INPUT_FOLDER, "countries_master_curated.csv")
 
 
 def load_clean_csv(filename: str) -> pd.DataFrame:
+    """Load one cleaned CSV file from the curated data folder."""
     path = os.path.join(INPUT_FOLDER, filename)
     print(f"Loading {path}")
     return pd.read_csv(path)
@@ -31,6 +35,8 @@ def drop_globally_incomplete_rows(df: pd.DataFrame,
 
 
 def main():
+    """Merge all cleaned category datasets into one master countries file."""
+
     # 1) Load all cleaned files
     dfs = [
         load_clean_csv("communications_data_clean.csv"),

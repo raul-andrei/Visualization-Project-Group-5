@@ -2,6 +2,7 @@
 import pandas as pd
 from investor_config import INVESTOR_CONFIG
 
+# Location of the merged + cleaned dataset used as the source for all investor views.
 MASTER_PATH = "data_curated/countries_master_curated.csv"
 
 
