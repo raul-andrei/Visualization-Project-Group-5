@@ -268,6 +268,23 @@ class Main:
             out = 100.0 - out
         return pd.Series(out, index=df.index)
 
+    def _add_re_norm_axes(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Add normalized 0–100 axes used for PCP brushing (fixed labels)."""
+        out = df.copy()
+        raw_cols = [
+            ("Real_GDP_per_Capita_USD", "GDP/cap", False),
+            ("Total_Population", "Pop", False),
+            ("Population_Growth_Rate", "Pop Growth", False),
+            ("Net_Migration_Rate", "Migration", False),
+            ("Unemployment_Rate_percent", "Unemp", True),
+            ("Public_Debt_percent_of_GDP", "Debt", True),
+        ]
+        for col, lab, inv in raw_cols:
+            if col not in out.columns:
+                out[col] = np.nan
+            out[lab] = self._normalize_0_100(out, col, invert=inv)
+        return out
+
     def _fmt_raw_value(self, col: str, x):
         if x is None or (isinstance(x, float) and not np.isfinite(x)):
             return "—"
@@ -322,6 +339,27 @@ class Main:
             mask &= np.array([_in_ranges(v, r) for v in colvals], dtype=bool)
 
         return df.loc[mask].copy()
+
+    def _apply_intersection(self, scored_df: pd.DataFrame, scatter_store: dict, pcp_store: dict) -> pd.DataFrame:
+        """Intersection-mode brush: (scatter selected countries) AND (PCP constraintrange)."""
+        df = scored_df.copy()
+
+        # Scatter selection filter
+        scatter_countries = []
+        if scatter_store and isinstance(scatter_store, dict):
+            scatter_countries = scatter_store.get("countries", []) or []
+        if scatter_countries:
+            df = df[df["Country"].astype(str).isin([str(c) for c in scatter_countries])].copy()
+
+        # PCP constraints filter (constraints are on normalized axes labels)
+        constraints = {}
+        if pcp_store and isinstance(pcp_store, dict):
+            constraints = (pcp_store.get("constraints") or {}) if "constraints" in pcp_store else (pcp_store.get("constraints", {}) or {})
+        if constraints:
+            df = self._add_re_norm_axes(df)
+            df = self._apply_constraints(df, constraints)
+
+        return df
 
     # ---------- Callbacks ----------
     def register_callbacks(self):
@@ -455,8 +493,10 @@ class Main:
             Output("world-map", "figure"),
             Input("filters-applied-store", "data"),
             Input("selected-country-store", "data"),
+            Input("scatter-brush-store", "data"),
+            Input("pcp-brush-store", "data"),
         )
-        def update_map(filters_applied, selected_country):
+        def update_map(filters_applied, selected_country, scatter_store, pcp_store):
             filters_applied = filters_applied or {}
 
             try:
@@ -466,6 +506,8 @@ class Main:
                     scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
                 except Exception:
                     return self._empty_world_figure()
+
+            scored_df = self._apply_intersection(scored_df, scatter_store, pcp_store)
 
             score_col = "RE_Opp"
             df_plot = scored_df[["Country", score_col]].dropna()
@@ -526,8 +568,10 @@ class Main:
         @self.app.callback(
             Output("top-5-chart", "children"),
             Input("filters-applied-store", "data"),
+            Input("scatter-brush-store", "data"),
+            Input("pcp-brush-store", "data"),
         )
-        def top5(filters_applied):
+        def top5(filters_applied, scatter_store, pcp_store):
             filters_applied = filters_applied or {}
             try:
                 scored_df = self._score_mode_b(scoring_df, filters_applied)
@@ -536,6 +580,8 @@ class Main:
                     scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
                 except Exception:
                     return "No data"
+
+            scored_df = self._apply_intersection(scored_df, scatter_store, pcp_store)
 
             score_col = "RE_Opp"
             df_top = scored_df[["Country", score_col]].dropna().nlargest(5, score_col)
@@ -559,6 +605,40 @@ class Main:
             return [{"label": o["label"], "value": o["col"]} for o in SCATTER_Y_OPTIONS]
 
         # -------------------------------------------------
+        # Scatter brushing -> store selected countries
+        # -------------------------------------------------
+        @self.app.callback(
+            Output("scatter-brush-store", "data"),
+            Input("score-attr-scatter", "selectedData"),
+            prevent_initial_call=True,
+        )
+        def store_scatter_brush(selectedData):
+            # Plotly/Dash will send `selectedData=None` when the figure refreshes.
+            # Do NOT clear the brush in that case (it causes flicker/reset loops).
+            if selectedData is None:
+                raise PreventUpdate
+            if "points" not in selectedData:
+                raise PreventUpdate
+
+            # Explicit clear (e.g., user double-clicks background) often yields empty points.
+            if not selectedData.get("points"):
+                return {"countries": []}
+            countries = []
+            for p in selectedData.get("points", []):
+                # px.scatter with hover_name uses hovertext
+                c = p.get("hovertext") or p.get("text")
+                if c:
+                    countries.append(str(c))
+            # de-dup while preserving order
+            seen = set()
+            uniq = []
+            for c in countries:
+                if c not in seen:
+                    seen.add(c)
+                    uniq.append(c)
+            return {"countries": uniq}
+
+        # -------------------------------------------------
         # Scatter figure + highlight selected
         # -------------------------------------------------
         @self.app.callback(
@@ -566,8 +646,9 @@ class Main:
             Input("filters-applied-store", "data"),
             Input("scatter-y-attr", "value"),
             Input("selected-country-store", "data"),
+            Input("pcp-brush-store", "data"),
         )
-        def update_score_attr_scatter(filters_applied, y_col, selected_country):
+        def update_score_attr_scatter(filters_applied, y_col, selected_country, pcp_store):
             filters_applied = filters_applied or {}
             y_col = y_col or "Real_GDP_per_Capita_USD"
 
@@ -582,6 +663,12 @@ class Main:
                     scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
                 except Exception:
                     return self._empty_message_fig("No data")
+
+            # IMPORTANT: do NOT filter the scatter by its own selection store.
+            # Doing so creates a loop: selection -> store -> figure update -> selection cleared.
+            # We only apply PCP constraints here (if any) so scatter can still be used to brush.
+            if pcp_store and isinstance(pcp_store, dict) and (pcp_store.get("constraints") or {}):
+                scored_df = self._apply_intersection(scored_df, {"countries": []}, pcp_store)
 
             dfp = scored_df[["Country", "RE_Opp", y_col]].copy()
             dfp["RE_Opp"] = self._safe_numeric_series(dfp["RE_Opp"], default=np.nan)
@@ -601,7 +688,13 @@ class Main:
                 title=f"Score vs {meta['label']}",
                 color_discrete_sequence=["#38a89a"],
             )
-            fig.update_traces(marker=dict(size=7, opacity=0.65))
+            fig.update_traces(
+                marker=dict(size=7, opacity=0.65),
+                selected=dict(marker=dict(opacity=0.95, size=9)),
+                unselected=dict(marker=dict(opacity=0.18)),
+            )
+            fig.update_layout(dragmode="lasso")
+            fig.update_layout(uirevision="score-attr-scatter")
 
             if selected_country:
                 hit = dfp[dfp["Country"].astype(str) == str(selected_country)]
@@ -678,6 +771,9 @@ class Main:
                     scored_df = self._score_mode_b(scoring_df, filters_applied)
                 except Exception:
                     scored_df = compute_real_estate_scores(scoring_df, fit_df=scoring_df, keep_intermediate=True)
+
+                # Do not apply brushing stores here; this callback re-renders the PCP figure.
+                # If it runs during brushing, Plotly clears constraintrange immediately.
 
                 score_col = "RE_Opp"
                 hit = scored_df[scored_df["Country"].astype(str) == str(selected_country)]
@@ -916,6 +1012,7 @@ class Main:
 
             constraints = (brush_store or {}).get("constraints", {}) if brush_store else {}
             df = pd.DataFrame(cohort_store["records"])
+
             labels = list(cohort_store.get("labels", []))
             selected_country = str(cohort_store.get("selected_country", ""))
 
@@ -1038,6 +1135,7 @@ class Main:
 
                 dcc.Store(id="drilldown-cohort-store", storage_type="memory"),
                 dcc.Store(id="pcp-brush-store", storage_type="memory"),
+                dcc.Store(id="scatter-brush-store", storage_type="memory"),
 
                 self.sidebar.render(),
 
