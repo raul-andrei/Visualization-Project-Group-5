@@ -231,8 +231,12 @@ def load_and_process_data() -> pd.DataFrame:
     """Load + clean + derive common features. Persona scoring will be computed interactively in Dash."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.abspath(os.path.join(script_dir, ".."))
-    file_path = os.path.join(project_root, "data_curated", "countries_master_curated.csv")
-
+    file_path = os.path.join(
+    project_root,
+    "data_curated",
+    "investor_views",
+    "real_estate_view.csv",
+)
     print(f"Loading data from: {file_path}")
     if not os.path.exists(file_path):
         print("CRITICAL ERROR: Data file not found.")

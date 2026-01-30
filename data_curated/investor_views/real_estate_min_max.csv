@@ -1,6 +1,6 @@
 col,label,dir,min,max,note
 Real_GDP_per_Capita_USD,GDP per Capita (USD),1,700,115700,
-Total_Population,Population,1,50,7979261010,
+Total_Population,Population,1,50,1413142846,
 Population_Growth_Rate,Population Growth (%),1,0,6.39,
 Net_Migration_Rate,Net Migration Rate,1,-2.4,45.8,
 Unemployment_Rate_percent,Unemployment (%),-1,0.1,36,
